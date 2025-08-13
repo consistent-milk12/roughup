@@ -7,6 +7,8 @@ use tree_sitter::{Language, Node, Parser, Query, QueryCursor, StreamingIterator}
 use crate::core::symbols::{
     Symbol, SymbolExtractor, SymbolKind, Visibility, build_qualified_name, parse_visibility,
 };
+// Reuse the shared helper to avoid drift
+use crate::infra::utils::TsNodeUtils;
 
 pub struct RustExtractor {
     language: Language,
@@ -90,8 +92,8 @@ impl SymbolExtractor for RustExtractor {
                 continue;
             };
 
-            let is_in_impl = has_ancestor(node, "impl_item");
-            let is_in_trait = has_ancestor(node, "trait_item");
+            let is_in_impl = TsNodeUtils::has_ancestor(node, "impl_item");
+            let is_in_trait = TsNodeUtils::has_ancestor(node, "trait_item");
 
             let kind = match (cname, is_in_impl, is_in_trait) {
                 ("function", false, false) => Some(SymbolKind::Function),
@@ -174,15 +176,6 @@ fn build_symbol(kind: SymbolKind, node: Node, bytes: &[u8], file: &Path) -> Opti
     })
 }
 
-fn has_ancestor(mut node: Node, kind: &str) -> bool {
-    while let Some(p) = node.parent() {
-        if p.kind() == kind {
-            return true;
-        }
-        node = p;
-    }
-    false
-}
 
 fn first_named_child_text<'a>(node: Node<'a>, bytes: &[u8], kinds: &[&str]) -> Option<String> {
     for i in 0..node.named_child_count() {

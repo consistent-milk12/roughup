@@ -314,18 +314,21 @@ fn extract_symbol_text(content: &str, sym: &Symbol) -> Result<String> {
 
     // Compute 0-based line indices.
     let start_idx = sym.start_line.saturating_sub(1);
-    let end_idx = sym.end_line;
+    // Treat end_line as inclusive; compute 0-based inclusive end index
+    let end_incl = sym.end_line.saturating_sub(1);
 
     // Build from lines while avoiding extra allocation.
     let mut out = String::new();
     for (i, line) in content.lines().enumerate() {
-        if i >= start_idx && i < end_idx {
+        // Include start..=end_incl (inclusive)
+        if i >= start_idx && i <= end_incl {
             if !out.is_empty() {
                 out.push('\n');
             }
             out.push_str(line);
         }
-        if i >= end_idx {
+        // Stop once we've passed end_incl
+        if i > end_incl {
             break;
         }
     }

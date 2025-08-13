@@ -153,11 +153,19 @@ impl PyDocUtils {
 
     /// Remove string prefixes, strip quotes, and dedent
     pub fn unquote_and_dedent(s: &str) -> String {
-        // Strip ASCII alpha prefixes like r, u, f, fr, rf
+        // Recognize only legal Python string prefixes (r,u,f,b combos, case-insensitive)
+        // and consume at most two letters (e.g., r, u, f, b, fr, rf).
         let mut i = 0usize;
-
-        while i < s.len() && s.as_bytes()[i].is_ascii_alphabetic() {
-            i += 1;
+        // Uppercase for easy matching
+        let up = s.chars().take(2).collect::<String>().to_uppercase();
+        // Accept "R","U","F","B" or any two-letter combo thereof (FR, RF, UR not common for docstrings, but safe)
+        let first = up.chars().nth(0);
+        let second = up.chars().nth(1);
+        let is_legal = |c: Option<char>| matches!(c, Some('R' | 'U' | 'F' | 'B'));
+        if is_legal(first) && is_legal(second) {
+            i = 2;
+        } else if is_legal(first) {
+            i = 1;
         }
 
         // Work with the remainder after prefixes

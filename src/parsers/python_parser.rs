@@ -24,6 +24,8 @@ use std::path::Path;
 use tree_sitter::{Language, Node, Parser, Query, QueryCursor, StreamingIterator};
 
 use crate::core::symbols::{Symbol, SymbolExtractor, SymbolKind, Visibility};
+// Reuse the shared helper to avoid drift
+use crate::infra::utils::TsNodeUtils;
 
 /// Extracts Python symbols (functions, classes, methods).
 pub struct PythonExtractor {
@@ -119,7 +121,7 @@ impl SymbolExtractor for PythonExtractor {
             // a separate "method" query pattern.
             let kind = match node.kind() {
                 "function_definition" => {
-                    if has_ancestor(node, "class_definition") {
+                    if TsNodeUtils::has_ancestor(node, "class_definition") {
                         SymbolKind::Method
                     } else {
                         SymbolKind::Function
@@ -383,17 +385,6 @@ fn basic_unescape(s: &str, is_raw: bool) -> String {
         }
     }
     out
-}
-
-/// Return true if `node` has an ancestor of the given kind.
-fn has_ancestor(mut node: Node, kind: &str) -> bool {
-    while let Some(p) = node.parent() {
-        if p.kind() == kind {
-            return true;
-        }
-        node = p;
-    }
-    false
 }
 
 #[cfg(test)]

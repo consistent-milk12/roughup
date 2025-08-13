@@ -51,8 +51,8 @@ pub fn run(args: crate::cli::SymbolsArgs, ctx: &crate::cli::AppContext) -> Resul
         VisibilityFilter::retain_public(&mut all);
     }
 
-    // Compute line numbers efficiently for each file’s symbols
-    LineNumberMapper::fill_lines(&mut all)?;
+    // Compute line numbers efficiently for each file's symbols
+    LineNumberMapper::fill_lines(&mut all, &args.path)?;
 
     // Write symbols to JSONL destination
     JsonlWriter::write(&all, &args.output)?;
@@ -324,7 +324,7 @@ struct LineNumberMapper;
 
 impl LineNumberMapper {
     /// Compute and assign line numbers for all symbols
-    fn fill_lines(symbols: &mut [Symbol]) -> Result<()> {
+    fn fill_lines(symbols: &mut [Symbol], root: &Path) -> Result<()> {
         // Group symbols by file to avoid re-indexing the same file
         let mut by_file: std::collections::BTreeMap<PathBuf, Vec<usize>> =
             std::collections::BTreeMap::new();
@@ -336,9 +336,10 @@ impl LineNumberMapper {
 
         // For each file, build an index and set line numbers
         for (file, idxs) in by_file {
-            // Read file once
-            let content = std::fs::read_to_string(&file)
-                .with_context(|| format!("Failed to re-read {}", file.display()))?;
+            // Re-read using absolute path: root.join(relative)
+            let abs = if file.is_absolute() { file.clone() } else { root.join(&file) };
+            let content = std::fs::read_to_string(&abs)
+                .with_context(|| format!("Failed to re-read {}", abs.display()))?;
 
             // Build line index from content
             let li = LineIndex::new(&content);
