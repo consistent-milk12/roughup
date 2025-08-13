@@ -1,0 +1,392 @@
+// File: Cargo.toml (lines 1-60)
+```toml
+[package]
+name = "roughup"
+version = "0.1.0"
+edition = "2024"
+description = "A super-fast, lightweight CLI for extracting and packaging source code for LLM workflows"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/your-username/roughup"
+keywords = ["cli", "llm", "extraction", "source-code", "symbols"]
+categories = ["command-line-utilities", "development-tools"]
+
+[[bin]]
+name = "rup"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.5.45", features = ["derive", "cargo"] }
+clap_complete = "4.5.57"
+
+ignore = "0.4.23"
+globset = "0.4.16"
+
+rayon = "1.11.0"
+memmap2 = "0.9.7"
+
+config = "0.15.13"
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.142"
+toml = "0.9.5"
+
+anyhow = "1.0.99"
+thiserror = "2.0.14"
+memchr = "2.7"
+
+owo-colors = "4.2.2"
+ptree = "0.5.2"
+indicatif = "0.18.0"
+
+# AST parsing & caching
+tree-sitter = { version = "0.25.8" }
+tree-sitter-rust = { version = "0.24.0" }
+tree-sitter-python = { version = "0.23.6" }
+tree-sitter-javascript = { version = "0.23.1" }
+tree-sitter-typescript = { version = "0.23.2" }
+tree-sitter-go = { version = "0.23.4" }
+tree-sitter-cpp = { version = "0.23.4" }
+moka = { version = "0.12.10", features = ["sync"] }
+
+# Tokenization
+tokenizers = { version = "0.21.4" }
+tiktoken-rs = { version = "0.7.0" }
+
+# Clipboard (optional)
+arboard = { version = "3.6.0" }
+smallvec = "1.15.1"
+
+[build-dependencies]
+cc = "*" # helps some tree-sitter grammar builds on CI
+
+[dev-dependencies]
+tempfile = "3.20.0"
+```
+
+// File: roughup.toml (lines 1-29)
+```toml
+ignore_patterns = [
+    "target/",
+    "node_modules/",
+    "dist/",
+    "build/",
+    ".git/",
+    "*.pyc",
+    "__pycache__/",
+    ".DS_Store",
+    "Thumbs.db",
+]
+
+[extract]
+annotate = false
+fence = false
+output_file = "extracted_source.txt"
+
+[tree]
+show_hidden = false
+
+[symbols]
+languages = ["rust", "python", "javascript"]
+include_private = false
+output_file = "symbols.jsonl"
+
+[chunk]
+max_tokens = 4000
+model = "gpt-4"
+output_dir = "chunks"
+```
+
+// File: CLAUDE.md (lines 1-74)
+```md
+# CLAUDE.md
+
+**MAXIMUM PERFORMANCE PROTOCOLS**
+
+1. ZERO TOKEN WASTE. PRECISE RESPONSES ONLY. NO FORMATTING. NO EXPLANATIONS UNLESS CRITICAL.
+2. IMMEDIATE PRODUCTION CODE. NO DRAFTS. NO ITERATIONS.
+3. SINGLE FUNCTION GENERATION PER PROMPT. MANDATORY 3 ARCHITECTURE OPTIMIZATION QUESTIONS.
+4. OUTPUT TO 'diff.rs' EXCLUSIVELY. ZERO DIRECT CODEBASE MODIFICATIONS.
+5. 80-LINE FUNCTION MAXIMUM. MICRO-OPTIMIZATION MANDATORY.
+6. VSCODE DIAGNOSTICS ONLY. ZERO CARGO COMMANDS FOR LINT/CHECK.
+7. RUST-2024 BLEEDING EDGE. CONST GENERICS + ASYNC TRAITS PREFERRED.
+8. PERFORMANCE FIRST DESIGN.
+
+## Project Overview
+
+**roughup** - Super-fast Rust CLI for extracting/packaging source code for LLM workflows. Smart gitignore-aware processing with parallel execution and tree-sitter symbol extraction.
+
+**Status**: Production-ready. Core features complete (extract, tree, symbols). Sophisticated inline module architecture.
+
+## Architecture
+
+**Inline Module System** - Enterprise-grade organization with single-file control:
+
+```
+src/lib.rs (MASTER CONTROL)
+├── core/          # High-performance processing (2,847 lines)
+│   ├── extract    # Line extraction + memory mapping
+│   ├── symbols    # Tree-sitter pipeline (Rust+Python, 572 lines)
+│   ├── tree       # Directory visualization + parallel
+│   └── chunk      # Token-aware LLM chunking
+├── parsers/       # AST parsing + moka caching
+│   ├── rust_parser    # Qualified names + visibility
+│   └── python_parser  # PEP 257 docstrings + methods
+└── infra/         # Infrastructure (lean)
+    ├── config     # TOML + feature flags
+    ├── io         # Memory-mapped I/O (>1MB threshold)
+    ├── walk       # Gitignore-aware + rayon parallelism
+    └── utils      # Common operations
+```
+
+**Strategic Re-exports** - Clean public API with performance annotations.
+**Performance-first** - Memory mapping, AST caching, parallel execution.
+
+## Development
+
+```bash
+cargo build --release     # Production build
+cargo test                # All 29 tests pass
+cargo run -- extract src/main.rs:1-10 --annotate --fence
+cargo run -- tree --depth 3
+cargo run -- symbols --languages rust,python
+```
+
+## Key Features
+
+- **Module Control**: All architecture in `lib.rs` - sophisticated inline declarations
+- **Symbol Extraction**: Tree-sitter Rust+Python with qualified names, visibility, PEP 257 docs
+- **Performance**: Memory-mapped I/O, moka AST caching, rayon parallelism
+- **Smart Walking**: Gitignore-aware with glob patterns, directory pruning
+- **LLM Optimized**: Token-aware chunking, clean output formatting
+
+## Dependencies
+
+**Core**: clap, ignore, rayon, memmap2, anyhow, serde
+**Symbols**: tree-sitter + grammars, moka cache  
+**Optional**: tokenizers, tiktoken-rs, arboard
+
+## Architecture Benefits
+
+- **Single-file module control** from lib.rs
+- **Performance documentation** with line counts
+- **Clean API surface** via strategic re-exports
+- **Professional presentation** - enterprise-grade organization
+- **Logical grouping** transcending filesystem layout
+```
+
+// File: diff.rs (lines 1-214)
+```rust
+use anyhow::{Context, Result};
+use std::path::{Path, PathBuf};
+use tokenizers::Tokenizer;
+
+/// Token-aware chunking backend using HF tokenizers (default) or tiktoken (feature-gated)
+pub struct ChunkingBackend {
+    tokenizer: Tokenizer,
+    model_name: String,
+}
+
+impl ChunkingBackend {
+    /// Create backend with HF tokenizer for specified model
+    pub fn new_hf(model_name: &str) -> Result<Self> {
+        // Common HF model mappings
+        let tokenizer_name = match model_name {
+            "gpt2" | "code-davinci" => "gpt2",
+            "claude" | "claude-3" => "claude", // Anthropic tokenizer
+            "llama2" | "llama" => "meta-llama/Llama-2-7b-hf",
+            "codellama" => "codellama/CodeLlama-7b-Python-hf", 
+            _ => model_name, // Pass through custom model names
+        };
+
+        let tokenizer = Tokenizer::from_pretrained(tokenizer_name, None)
+            .context("Failed to load HF tokenizer")?;
+
+        Ok(Self { 
+            tokenizer, 
+            model_name: model_name.to_string(),
+        })
+    }
+
+    #[cfg(feature = "tiktoken")]
+    /// Create backend with tiktoken for OpenAI compatibility
+    pub fn new_tiktoken(model_name: &str) -> Result<Self> {
+        // tiktoken backend implementation when feature enabled
+        let encoding = tiktoken_rs::get_bpe_from_model(model_name)
+            .context("Failed to get tiktoken encoding")?;
+        
+        // Wrap tiktoken in HF tokenizer interface
+        unimplemented!("tiktoken backend - use HF tokenizers as default")
+    }
+
+    /// Count tokens in text efficiently 
+    pub fn count_tokens(&self, text: &str) -> Result<usize> {
+        let encoding = self.tokenizer.encode(text, false)
+            .map_err(|e| anyhow::anyhow!("Tokenization failed: {}", e))?;
+        Ok(encoding.len())
+    }
+
+    /// Split text into token-aware chunks with overlap
+    pub fn chunk_with_overlap(
+        &self, 
+        text: &str, 
+        max_tokens: usize, 
+        overlap_tokens: usize
+    ) -> Result<Vec<String>> {
+        let encoding = self.tokenizer.encode(text, false)
+            .map_err(|e| anyhow::anyhow!("Encoding failed: {}", e))?;
+        
+        let token_ids = encoding.get_ids();
+        
+        if token_ids.len() <= max_tokens {
+            return Ok(vec![text.to_string()]);
+        }
+
+        let mut chunks = Vec::new();
+        let mut start = 0;
+
+        while start < token_ids.len() {
+            let end = (start + max_tokens).min(token_ids.len());
+            
+            // Decode token range back to text
+            let chunk_tokens = &token_ids[start..end];
+            let chunk_text = self.tokenizer.decode(chunk_tokens, false)
+                .map_err(|e| anyhow::anyhow!("Decode failed: {}", e))?;
+                
+            chunks.push(chunk_text);
+            
+            if end >= token_ids.len() {
+                break;
+            }
+            
+            // Move start forward with overlap
+            start = end.saturating_sub(overlap_tokens);
+        }
+
+        Ok(chunks)
+    }
+}
+
+/// Symbol-aware chunking strategy - prefer function/class boundaries
+pub fn chunk_by_symbols(
+    content: &str,
+    symbols: &[crate::core::symbols::Symbol],
+    max_tokens: usize,
+    backend: &ChunkingBackend,
+) -> Result<Vec<ChunkInfo>> {
+    let mut chunks = Vec::new();
+    let mut current_tokens = 0;
+    let mut current_symbols = Vec::new();
+    
+    for symbol in symbols {
+        let symbol_text = extract_symbol_text(content, symbol)?;
+        let token_count = backend.count_tokens(&symbol_text)?;
+        
+        // If adding this symbol would exceed limit, finalize current chunk
+        if current_tokens + token_count > max_tokens && !current_symbols.is_empty() {
+            chunks.push(ChunkInfo::from_symbols(content, &current_symbols, backend)?);
+            current_symbols.clear();
+            current_tokens = 0;
+        }
+        
+        // If single symbol exceeds limit, split it with token-based chunking
+        if token_count > max_tokens {
+            let sub_chunks = backend.chunk_with_overlap(&symbol_text, max_tokens, 128)?;
+            for (i, sub_chunk) in sub_chunks.into_iter().enumerate() {
+                chunks.push(ChunkInfo::new(
+                    sub_chunk,
+                    format!("{}[part_{}]", symbol.qualified_name, i + 1),
+                    symbol.file.clone(),
+                    symbol.start_line,
+                    symbol.end_line,
+                ));
+            }
+        } else {
+            current_symbols.push(symbol.clone());
+            current_tokens += token_count;
+        }
+    }
+    
+    // Add remaining symbols as final chunk
+    if !current_symbols.is_empty() {
+        chunks.push(ChunkInfo::from_symbols(content, &current_symbols, backend)?);
+    }
+    
+    Ok(chunks)
+}
+
+/// Chunk metadata for LLM consumption
+#[derive(Debug, Clone)]
+pub struct ChunkInfo {
+    pub content: String,
+    pub symbol_path: String,
+    pub file: PathBuf,
+    pub start_line: usize,
+    pub end_line: usize,
+    pub token_count: usize,
+}
+
+impl ChunkInfo {
+    pub fn new(
+        content: String, 
+        symbol_path: String, 
+        file: PathBuf, 
+        start_line: usize, 
+        end_line: usize
+    ) -> Self {
+        Self {
+            token_count: 0, // Will be computed later
+            content,
+            symbol_path,
+            file,
+            start_line,
+            end_line,
+        }
+    }
+    
+    pub fn from_symbols(
+        content: &str,
+        symbols: &[crate::core::symbols::Symbol],
+        backend: &ChunkingBackend,
+    ) -> Result<Self> {
+        let mut chunk_content = String::new();
+        let mut symbol_names = Vec::new();
+        let mut min_line = usize::MAX;
+        let mut max_line = 0;
+        let file = symbols[0].file.clone();
+        
+        for symbol in symbols {
+            let symbol_text = extract_symbol_text(content, symbol)?;
+            chunk_content.push_str(&symbol_text);
+            chunk_content.push('\n');
+            symbol_names.push(symbol.qualified_name.clone());
+            min_line = min_line.min(symbol.start_line);
+            max_line = max_line.max(symbol.end_line);
+        }
+        
+        let token_count = backend.count_tokens(&chunk_content)?;
+        let symbol_path = symbol_names.join(", ");
+        
+        Ok(Self {
+            content: chunk_content,
+            symbol_path,
+            file,
+            start_line: min_line,
+            end_line: max_line,
+            token_count,
+        })
+    }
+}
+
+/// Extract text for a specific symbol from file content
+fn extract_symbol_text(content: &str, symbol: &crate::core::symbols::Symbol) -> Result<String> {
+    let lines: Vec<&str> = content.lines().collect();
+    
+    if symbol.start_line == 0 || symbol.start_line > lines.len() {
+        return Ok(String::new());
+    }
+    
+    let start_idx = symbol.start_line.saturating_sub(1);
+    let end_idx = symbol.end_line.min(lines.len());
+    
+    Ok(lines[start_idx..end_idx].join("\n"))
+}
+```

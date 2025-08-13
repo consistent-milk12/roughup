@@ -1,0 +1,52 @@
+ "js")?;
+        write_file(root, "src/lib.rs", "pub fn x() {}")?;
+
+        // Provide extra ignores that target directories
+        let ignores = vec!["target/**".to_string(), "node_modules/**".to_string()];
+
+        // Build walker with extra ignores
+        let walker = FileWalker::new(&ignores)?;
+
+        // Walk files
+        let files = walker.walk_files(root);
+
+
+        // Only src/lib.rs should remain (others pruned/filtered)
+        assert_eq!(files.len(), 1, "unexpected files: {files:?}");
+        assert_eq!(
+            files[0].strip_prefix(root).unwrap(),
+            Path::new("src/lib.rs")
+        );
+
+        // Done
+        Ok(())
+    }
+
+    #[test]
+    fn test_hidden_files_included_unless_ignored() -> Result<()> {
+        // Create temp directory
+        let temp_dir = TempDir::new()?;
+        let root = temp_dir.path();
+
+        // Create hidden and normal files
+        write_file(root, ".hidden.txt", "h")?;
+        write_file(root, "visible.txt", "v")?;
+
+        // No .gitignore and no extra ignores → hidden should be included
+        let walker = FileWalker::new(&[])?;
+        let mut files = walker.walk_files(root);
+
+        // Normalize relative paths for assertion clarity
+        for p in &mut files {
+            *p = p.strip_prefix(root).unwrap().to_path_buf();
+        }
+
+        // Expect both files
+        assert!(files.contains(&PathBuf::from(".hidden.txt")));
+        assert!(files.contains(&PathBuf::from("visible.txt")));
+
+        // Done
+        Ok(())
+    }
+}
+```

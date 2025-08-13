@@ -1,0 +1,89 @@
+//! Cross-platform tests for LF/CRLF line indexing.
+
+use roughup::infra::line_index::NewlineIndex;
+
+#[test]
+fn empty_buffer_has_zero_lines() {
+    let bytes = b"";
+    let idx = NewlineIndex::build(bytes);
+    assert_eq!(idx.line_count(), 0);
+    assert_eq!(idx.start_byte_of_line(1), None);
+    assert_eq!(idx.end_byte_of_line(1, bytes), None);
+}
+
+#[test]
+fn single_line_no_newline() {
+    let bytes = b"abc";
+    let idx = NewlineIndex::build(bytes);
+    assert_eq!(idx.line_count(), 1);
+    assert_eq!(idx.start_byte_of_line(1), Some(0));
+    assert_eq!(idx.end_byte_of_line(1, bytes), Some(3));
+    assert_eq!(idx.byte_range_for_lines(1, 1, bytes), Some((0, 3)));
+    assert_eq!(idx.line_of_byte(0), 1);
+    assert_eq!(idx.line_of_byte(2), 1);
+}
+
+#[test]
+fn lf_three_lines_with_trailing_nl() {
+    let bytes = b"a\nbcd\nef\n";
+    // positions: '\n' at 1, 5, 8
+    let idx = NewlineIndex::build(bytes);
+    assert_eq!(idx.line_count(), 4);
+
+    // Line 2: "bcd"
+    assert_eq!(idx.start_byte_of_line(2), Some(2));
+    assert_eq!(idx.end_byte_of_line(2, bytes), Some(5));
+    assert_eq!(idx.byte_range_for_lines(2, 2, bytes), Some((2, 5)));
+
+    // Lines 2..3: "bcd\nef"
+    let (s, e) = idx.byte_range_for_lines(2, 3, bytes).unwrap();
+    assert_eq!(&bytes[s..e], b"bcd\nef");
+
+    // Byte→line mapping
+    assert_eq!(idx.line_of_byte(0), 1); // 'a'
+    assert_eq!(idx.line_of_byte(1), 2); // '\n' → next line
+    assert_eq!(idx.line_of_byte(2), 2); // 'b'
+    assert_eq!(idx.line_of_byte(8), 4); // final '\n' → next line
+}
+
+#[test]
+fn crlf_three_lines_without_final_nl() {
+    let bytes = b"a\r\nbcd\r\nef";
+    // positions: '\n' at 2, 7
+    let idx = NewlineIndex::build(bytes);
+    assert_eq!(idx.line_count(), 3);
+
+    // Line 1: "a" (exclude '\r')
+    assert_eq!(idx.start_byte_of_line(1), Some(0));
+    assert_eq!(idx.end_byte_of_line(1, bytes), Some(1));
+    assert_eq!(idx.byte_range_for_lines(1, 1, bytes), Some((0, 1)));
+    assert_eq!(&bytes[0..1], b"a");
+
+    // Line 2: "bcd" (exclude '\r')
+    assert_eq!(idx.start_byte_of_line(2), Some(3));
+    assert_eq!(idx.end_byte_of_line(2, bytes), Some(6));
+    assert_eq!(&bytes[3..6], b"bcd");
+
+    // Lines 2..3: "bcd\r\nef" (line 3 ends at EOF)
+    let (s, e) = idx.byte_range_for_lines(2, 3, bytes).unwrap();
+    assert_eq!(&bytes[s..e], b"bcd\r\nef");
+
+    // Byte→line mapping
+    assert_eq!(idx.line_of_byte(0), 1); // 'a'
+    assert_eq!(idx.line_of_byte(2), 2); // '\n' → next line
+    assert_eq!(idx.line_of_byte(3), 2); // 'b'
+    assert_eq!(idx.line_of_byte(bytes.len()), 3); // EOF fence
+}
+
+#[test]
+fn out_of_range_requests_return_none() {
+    let bytes = b"x\ny";
+    let idx = NewlineIndex::build(bytes);
+    assert_eq!(idx.line_count(), 2);
+    assert_eq!(idx.start_byte_of_line(0), None);
+    assert_eq!(idx.start_byte_of_line(3), None);
+    assert_eq!(idx.end_byte_of_line(0, bytes), None);
+    assert_eq!(idx.end_byte_of_line(4, bytes), None);
+    assert_eq!(idx.byte_range_for_lines(3, 4, bytes), None);
+    assert_eq!(idx.byte_range_for_lines(2, 1, bytes), None);
+}

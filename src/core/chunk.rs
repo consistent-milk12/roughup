@@ -1,0 +1,456 @@
+//! Filepath: src/chunking/gpt_chunker.rs
+//! ----------------------------------------------------------
+//! Token-aware chunking implemented purely with `tiktoken_rs`
+//! v0.7.0, supporting OpenAI GPT models only.
+//!
+//! Design goals:
+//! - Resolve correct BPE via `get_bpe_from_model` when given a
+//!   GPT model id (e.g., "gpt-4o", "gpt-4o-mini").
+//! - Accept canonical encoding names ("o200k_base", etc.).
+//! - Provide fast token counting and overlap-aware chunking.
+//! - Use byte ranges for symbol extraction (O(1) slicing).
+//! - Ensure forward progress even with extreme overlaps.
+//!
+//! Notes:
+//! - `CoreBPE::encode_ordinary` returns `Vec<usize>` tokens.
+//! - `CoreBPE::decode(Vec<usize>) -> Result<String>` yields a
+//!   valid UTF-8 reconstruction for ordinary text tokens.
+//! - We reject non-GPT identifiers explicitly.
+//!
+//! Requires in Cargo.toml:
+//!   tiktoken-rs = "0.7"
+//! ----------------------------------------------------------
+
+use anyhow::{Context, Result, anyhow, bail}; // error types
+use std::path::PathBuf; // path types
+
+use tiktoken_rs::{
+    CoreBPE, // model->BPE
+    // BPE helpers
+    cl100k_base,
+    get_bpe_from_model,
+    o200k_base,
+    p50k_base,
+    r50k_base, // encoding fns
+};
+
+use crate::core::symbols::Symbol; // symbol type
+
+/// Chunker specialized for GPT models using `tiktoken_rs`.
+pub struct GptChunker {
+    /// Selected BPE for tokenization/decoding.
+    bpe: CoreBPE,
+    /// Normalized model/encoding label (for diagnostics).
+    #[expect(unused, reason = "TODO: MARKED FOR LATER")]
+    label: String,
+}
+
+impl GptChunker {
+    /// Build from a GPT model id (preferred) or a canonical
+    /// encoding name. Non-GPT identifiers are rejected.
+    pub fn new(model_or_encoding: &str) -> Result<Self> {
+        // Normalize for matching and diagnostics.
+        let raw = model_or_encoding.trim();
+        let lower = raw.to_ascii_lowercase();
+
+        // Try "model id" first (e.g., "gpt-4o", "gpt-4.1", etc.).
+        // If this fails, we fall back to explicit encodings.
+        let bpe = match get_bpe_from_model(&lower) {
+            Ok(b) => b,
+            Err(_) => {
+                // Accept canonical encoding names explicitly.
+                match lower.as_str() {
+                    "o200k_base" => o200k_base().context("load o200k_base")?,
+                    "cl100k_base" => cl100k_base().context("load cl100k_base")?,
+                    "p50k_base" => p50k_base().context("load p50k_base")?,
+                    "r50k_base" => r50k_base().context("load r50k_base")?,
+                    _ => {
+                        // Reject obvious non-GPT identifiers.
+                        bail!(
+                            "Unsupported model/encoding '{raw}'. \
+                             Only OpenAI GPT models or canonical \
+                             encodings are allowed."
+                        )
+                    }
+                }
+            }
+        };
+
+        // Store the resolved label for visibility/telemetry.
+        Ok(Self { bpe, label: lower })
+    }
+
+    /// Count tokens in `text` using the resolved BPE.
+    pub fn count_tokens(&self, text: &str) -> usize {
+        // Use `encode_ordinary` to avoid special tokens logic.
+        self.bpe.encode_ordinary(text).len()
+    }
+
+    /// Token-aware chunking with N-token overlap.
+    /// Guarantees forward progress and clamps overlaps safely.
+    pub fn chunk_with_overlap(
+        &self,
+        text: &str,
+        max_tokens: usize,
+        overlap_tokens: usize,
+    ) -> Result<Vec<String>> {
+        // Reject a zero max (no valid window).
+        if max_tokens == 0 {
+            bail!("max_tokens must be greater than 0");
+        }
+
+        // Clamp overlap into [0, max_tokens - 1].
+        let overlap = overlap_tokens.min(max_tokens.saturating_sub(1));
+
+        // Encode once to amortize the work.
+        let ids = self.bpe.encode_ordinary(text);
+        let n = ids.len();
+
+        // If the entire text fits, return it as a single chunk.
+        if n <= max_tokens {
+            return Ok(vec![text.to_string()]);
+        }
+
+        // Pre-size the output vector roughly by window count.
+        let mut out = Vec::with_capacity(n.div_ceil(max_tokens));
+
+        // Slide the window and decode each token slice.
+        let mut start = 0usize;
+        while start < n {
+            // Compute the end of the current window.
+            let end = (start + max_tokens).min(n);
+
+            // Guard against zero-length slices.
+            if end <= start {
+                break;
+            }
+
+            // Decode to UTF-8 String using the BPE.
+            let chunk = self
+                .bpe
+                .decode(ids[start..end].to_vec())
+                .map_err(|e| anyhow!("decode failed: {e}"))?;
+
+            // Push the reconstructed chunk text.
+            out.push(chunk);
+
+            // Stop once we reach the end.
+            if end == n {
+                break;
+            }
+
+            // Advance start while honoring overlap.
+            let next = end.saturating_sub(overlap);
+
+            // Enforce forward progress in worst-case overlaps.
+            start = next.max(start + 1);
+        }
+
+        // Return the sequence of chunk strings.
+        Ok(out)
+    }
+}
+
+/// Chunk metadata suitable for LLM consumption.
+#[derive(Debug, Clone)]
+pub struct ChunkInfo {
+    /// Chunk body text.
+    pub content: String,
+    /// Qualified symbol names (or part tag).
+    pub symbol_path: String,
+    /// Source file path.
+    pub file: PathBuf,
+    /// 1-based line span covered by the chunk.
+    pub start_line: usize,
+    /// 1-based line span covered by the chunk.
+    pub end_line: usize,
+    /// Token count under the active BPE.
+    pub token_count: usize,
+}
+
+/// Prefer function/class boundaries; split oversize symbols
+/// with token-based chunking. All symbols must be from the
+/// same source file for coherent metadata.
+pub fn chunk_by_symbols(
+    content: &str,
+    symbols: &[Symbol],
+    max_tokens: usize,
+    chunker: &GptChunker,
+) -> Result<Vec<ChunkInfo>> {
+    // Trivial empty input.
+    if symbols.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Enforce single-file invariant for coherent metadata.
+    let first = &symbols[0].file;
+    if symbols.iter().any(|s| s.file != *first) {
+        bail!("symbols must originate from a single file");
+    }
+
+    // Aggregation state for the current chunk-in-progress.
+    let mut acc_syms: Vec<Symbol> = Vec::new();
+    let mut acc_tokens: usize = 0usize;
+
+    // Final output collection.
+    let mut out: Vec<ChunkInfo> = Vec::new();
+
+    // Walk symbols in order and aggregate conservatively.
+    for sym in symbols {
+        // Slice symbol text by byte range for O(1) access.
+        let s_text = extract_symbol_text(content, sym)?;
+        let s_tok = chunker.count_tokens(&s_text);
+
+        // If adding this symbol blows the budget, flush.
+        if !acc_syms.is_empty() && acc_tokens + s_tok > max_tokens {
+            out.push(ChunkInfo::from_symbols(content, &acc_syms, chunker)?);
+            acc_syms.clear();
+            acc_tokens = 0;
+        }
+
+        // If the symbol itself is oversize, split by tokens.
+        if s_tok > max_tokens {
+            let parts = chunker.chunk_with_overlap(&s_text, max_tokens, /*overlap=*/ 128)?;
+            for (i, part) in parts.into_iter().enumerate() {
+                let tok = chunker.count_tokens(&part);
+                out.push(ChunkInfo {
+                    content: part,
+                    symbol_path: format!("{}[part_{}]", sym.qualified_name, i + 1),
+                    file: sym.file.clone(),
+                    start_line: sym.start_line,
+                    end_line: sym.end_line,
+                    token_count: tok,
+                });
+            }
+        } else {
+            // Otherwise accumulate and continue.
+            acc_syms.push(sym.clone());
+            acc_tokens += s_tok;
+        }
+    }
+
+    // Flush any remaining aggregate.
+    if !acc_syms.is_empty() {
+        out.push(ChunkInfo::from_symbols(content, &acc_syms, chunker)?);
+    }
+
+    // Return the composed chunk list.
+    Ok(out)
+}
+
+impl ChunkInfo {
+    /// Build a chunk from a set of symbols by concatenating
+    /// their byte-sliced text, preserving order and adding a
+    /// single newline between consecutive symbols.
+    pub fn from_symbols(content: &str, symbols: &[Symbol], chunker: &GptChunker) -> Result<Self> {
+        // Require at least one symbol for a valid chunk.
+        if symbols.is_empty() {
+            bail!("from_symbols requires at least one symbol");
+        }
+
+        // All symbols should share a common file path.
+        let file = symbols[0].file.clone();
+
+        // Pre-compute capacity and min/max line spans.
+        let mut total = 0usize;
+        let mut min_line = usize::MAX;
+        let mut max_line = 0usize;
+        for s in symbols {
+            // Byte-span length plus one newline.
+            total += s.byte_end.saturating_sub(s.byte_start) + 1;
+            min_line = min_line.min(s.start_line);
+            max_line = max_line.max(s.end_line);
+        }
+
+        // Assemble the chunk text in a single buffer.
+        let mut buf = String::with_capacity(total);
+        let mut names: Vec<String> = Vec::with_capacity(symbols.len());
+
+        for (idx, s) in symbols.iter().enumerate() {
+            // Slice by bytes; fall back to lines if needed.
+            let seg = extract_symbol_text(content, s)?;
+            // Append the segment text.
+            buf.push_str(&seg);
+            // Append a single newline between segments.
+            if idx + 1 != symbols.len() {
+                buf.push('\n');
+            }
+            // Track qualified symbol name.
+            names.push(s.qualified_name.clone());
+        }
+
+        // Compute the token count under the active BPE.
+        let token_count = chunker.count_tokens(&buf);
+
+        // Join qualified names for display.
+        let symbol_path = names.join(", ");
+
+        // Emit the final chunk record.
+        Ok(Self {
+            content: buf,
+            symbol_path,
+            file,
+            start_line: min_line,
+            end_line: max_line,
+            token_count,
+        })
+    }
+}
+
+/// Extract symbol text via byte ranges when possible.
+/// Falls back to line slicing if the range is invalid.
+fn extract_symbol_text(content: &str, sym: &Symbol) -> Result<String> {
+    // Attempt O(1) byte slice first.
+    if sym.byte_start <= sym.byte_end
+        && let Some(s) = content.get(sym.byte_start..sym.byte_end)
+    {
+        return Ok(s.to_string());
+    }
+
+    // Conservative line-based fallback.
+    if sym.start_line == 0 {
+        return Ok(String::new());
+    }
+
+    // Compute 0-based line indices.
+    let start_idx = sym.start_line.saturating_sub(1);
+    let end_idx = sym.end_line;
+
+    // Build from lines while avoiding extra allocation.
+    let mut out = String::new();
+    for (i, line) in content.lines().enumerate() {
+        if i >= start_idx && i < end_idx {
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            out.push_str(line);
+        }
+        if i >= end_idx {
+            break;
+        }
+    }
+
+    // Return the reconstructed segment.
+    Ok(out)
+}
+
+/// CLI run function - integrates GptChunker with command-line interface
+pub fn run(args: crate::cli::ChunkArgs) -> anyhow::Result<()> {
+    // Initialize the GPT chunker with specified model
+    let chunker = GptChunker::new(&args.model)
+        .with_context(|| format!("Failed to initialize chunker for model '{}'", args.model))?;
+
+    // Create output directory if it doesn't exist
+    std::fs::create_dir_all(&args.output_dir).with_context(|| {
+        format!(
+            "Failed to create output directory: {}",
+            args.output_dir.display()
+        )
+    })?;
+
+    // Read input file content
+    let content = crate::infra::io::read_file_smart(&args.input)?;
+    let content_str = content.as_ref();
+
+    // Determine chunking strategy - try symbols first, fallback to tokens
+    let chunks = match extract_symbols_for_chunking(&args.input) {
+        Ok(symbols) if !symbols.is_empty() => {
+            println!(
+                "Found {} symbols, chunking by symbol boundaries",
+                symbols.len()
+            );
+            chunk_by_symbols(content_str, &symbols, args.max_tokens, &chunker)?
+        }
+        _ => {
+            println!("No symbols found, using token-based chunking");
+            chunk_by_tokens(&chunker, content_str, args.max_tokens)?
+        }
+    };
+
+    // Write chunks to individual files and create manifest
+    write_chunks_and_manifest(&chunks, &args.output_dir)?;
+
+    // Print success summary
+    println!(
+        "✓ Created {} chunks in {}",
+        chunks.len(),
+        args.output_dir.display()
+    );
+    let total_tokens: usize = chunks.iter().map(|c| c.token_count).sum();
+    println!("  Total tokens: {}", total_tokens);
+
+    Ok(())
+}
+
+/// Extract symbols for chunking (simplified interface)
+fn extract_symbols_for_chunking(file_path: &std::path::Path) -> Result<Vec<Symbol>> {
+    let content = std::fs::read_to_string(file_path)?;
+
+    // Detect language from file extension
+    let lang = match file_path.extension().and_then(|e| e.to_str()) {
+        Some("rs") => "rust",
+        Some("py") => "python",
+        _ => return Ok(Vec::new()), // Unsupported file type
+    };
+
+    let extractor = crate::core::symbols::get_extractor(lang)?;
+    extractor.extract_symbols(&content, file_path)
+}
+
+/// Token-based chunking fallback
+fn chunk_by_tokens(
+    chunker: &GptChunker,
+    content: &str,
+    max_tokens: usize,
+) -> Result<Vec<ChunkInfo>> {
+    let text_chunks = chunker.chunk_with_overlap(content, max_tokens, 128)?; // 128-token overlap
+
+    let mut chunks = Vec::new();
+    for (i, chunk_text) in text_chunks.into_iter().enumerate() {
+        let token_count = chunker.count_tokens(&chunk_text);
+        chunks.push(ChunkInfo {
+            content: chunk_text,
+            symbol_path: format!("chunk_{}", i + 1),
+            file: std::path::PathBuf::new(),
+            start_line: 0,
+            end_line: 0,
+            token_count,
+        });
+    }
+
+    Ok(chunks)
+}
+
+/// Write chunks to files and create JSONL manifest
+fn write_chunks_and_manifest(chunks: &[ChunkInfo], output_dir: &std::path::Path) -> Result<()> {
+    use std::fs;
+    use std::io::{BufWriter, Write};
+
+    // Write individual chunk files
+    for (i, chunk) in chunks.iter().enumerate() {
+        let chunk_file = output_dir.join(format!("chunk_{:03}.txt", i + 1));
+        fs::write(&chunk_file, &chunk.content)
+            .with_context(|| format!("Failed to write chunk file: {}", chunk_file.display()))?;
+    }
+
+    // Create JSONL manifest with metadata
+    let manifest_file = output_dir.join("chunks_manifest.jsonl");
+    let mut writer = BufWriter::new(std::fs::File::create(&manifest_file)?);
+
+    for (i, chunk) in chunks.iter().enumerate() {
+        let metadata = serde_json::json!({
+            "chunk_id": i + 1,
+            "file": format!("chunk_{:03}.txt", i + 1),
+            "symbol_path": chunk.symbol_path,
+            "source_file": chunk.file,
+            "start_line": chunk.start_line,
+            "end_line": chunk.end_line,
+            "token_count": chunk.token_count
+        });
+
+        writeln!(writer, "{}", serde_json::to_string(&metadata)?)?;
+    }
+
+    writer.flush()?;
+    Ok(())
+}

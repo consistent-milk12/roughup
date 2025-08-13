@@ -1,0 +1,1574 @@
+// File: src/core/symbols.rs (lines 1-200)
+```rust
+//! Filepath: src/symbols.rs
+//! End-to-end symbol extraction pipeline organized into
+//! small structs with associated functions only. This
+//! module is feature-gated by `symbols` where relevant,
+//! and keeps responsibilities explicit and testable.
+use anyhow::{Context, Result}; // Error handling
+use rayon::prelude::*; // Parallelism
+use serde::{Deserialize, Serialize}; // JSONL records
+
+use std::{
+    collections::HashSet,   // Fast language filter
+    fs::File,               // Output file handle
+    io::{BufWriter, Write}, // Buffered writer
+    path::{Path, PathBuf},  // Paths
+};
+
+use crate::parsers::{PythonExtractor, RustExtractor};
+
+/// Public CLI entry point expected by the command layer
+pub fn run(args: crate::cli::SymbolsArgs) -> Result<()> {
+    // Load configuration with graceful fallback
+    let config = crate::infra::config::load_config().unwrap_or_default();
+
+    // Build a Gitignore-aware file walker with extra globs
+    let walker = crate::infra::walk::FileWalker::new(&config.ignore_patterns)?;
+
+    // Resolve target languages from args or config
+    let langs = LanguageSelector::resolve(&args, &config);
+
+    // Collect files under root filtered by language
+    let files = FileCollector::collect(&walker, &args.path, &langs);
+
+    // Early exit if nothing to do
+    if files.is_empty() {
+        println!("No files found for languages: {:?}", langs.as_vec());
+        return Ok(());
+    }
+
+    // Inform the user how many files will be processed
+    println!("Extracting symbols from {} files...", files.len());
+
+    // Extract symbols in parallel and aggregate results
+    let mut all: Vec<Symbol> = SymbolsExecutor::extract_parallel(&files, &args)?;
+
+    // Optionally filter private symbols based on flag
+    if !args.include_private {
+        VisibilityFilter::retain_public(&mut all);
+    }
+
+    // Compute line numbers efficiently for each file’s symbols
+    LineNumberMapper::fill_lines(&mut all)?;
+
+    // Write symbols to JSONL destination
+    JsonlWriter::write(&all, &args.output)?;
+
+    // Print a success message with the output path
+    println!(
+        "✓ Extracted {} symbols to {}",
+        all.len(),
+        args.output.display()
+    );
+
+    // Done
+    Ok(())
+}
+
+/// Normalized symbol record optimized for LLM consumption
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Symbol {
+    /// File path relative to project root
+    pub file: PathBuf,
+
+    /// Programming language label
+    pub lang: String,
+
+    /// Normalized symbol kind
+    pub kind: SymbolKind,
+
+    /// Simple declared name
+    pub name: String,
+
+    /// Qualified name (language-appropriate)
+    pub qualified_name: String,
+
+    /// Start byte in the file
+    pub byte_start: usize,
+
+    /// End byte in the file
+    pub byte_end: usize,
+
+    /// 1-based start line (computed post-extraction)
+    pub start_line: usize,
+
+    /// 1-based end line (computed post-extraction)
+    pub end_line: usize,
+
+    /// Optional visibility information
+    pub visibility: Option<Visibility>,
+
+    /// Optional documentation preview
+    pub doc: Option<String>,
+}
+
+/// Normalized symbol kinds across languages
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SymbolKind {
+    /// Free-standing function
+    Function,
+
+    /// Class/impl/trait method
+    Method,
+
+    /// Rust struct or similar
+    Struct,
+
+    /// Rust/TypeScript enum
+    Enum,
+
+    /// Rust trait
+    Trait,
+
+    /// Python/TS/Java class
+    Class,
+
+    /// Interface-like construct
+    Interface,
+
+    /// Rust impl block
+    Impl,
+
+    /// Type alias / typedef
+    TypeAlias,
+
+    /// Module / namespace
+    Module,
+
+    /// Package / top-level unit
+    Package,
+
+    /// Local or field variable
+    Variable,
+
+    /// Constant definition
+    Constant,
+}
+
+/// Normalized visibility levels
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Visibility {
+    /// Publicly visible
+    Public,
+
+    /// Private/internal
+    Private,
+
+    /// Protected (OO languages)
+    Protected,
+
+    /// Internal (e.g., C#)
+    Internal,
+}
+
+/// Internal helper that selects target languages
+struct LanguageSelector {
+    /// Canonical lowercase language labels
+    set: HashSet<String>,
+
+    /// Original order for user messages
+    ordered: Vec<String>,
+}
+
+impl LanguageSelector {
+    /// Construct from CLI args and config fallback
+    fn resolve(args: &crate::cli::SymbolsArgs, cfg: &crate::infra::config::Config) -> Self {
+        // Choose CLI-provided list or config default
+        let ordered = if args.languages.is_empty() {
+            cfg.symbols.languages.clone()
+        } else {
+            args.languages.clone()
+        };
+
+        // Normalize to lowercase for matching
+        let set = ordered
+            .iter()
+            .map(|s| s.to_lowercase())
+            .collect::<HashSet<_>>();
+
+        // Return the selector
+        Self { set, ordered }
+    }
+
+    /// Test if a language label is selected
+    fn contains(&self, lang: &str) -> bool {
+        self.set.contains(lang)
+    }
+
+    /// Expose ordered languages for messages
+    fn as_vec(&self) -> Vec<String> {
+```
+
+// File: src/core/symbols.rs (lines 201-400)
+```rust
+        self.ordered.clone()
+    }
+}
+
+/// File collection based on Gitignore-aware walking
+struct FileCollector;
+
+impl FileCollector {
+    /// Walk the tree and retain files that match selected languages
+    fn collect(
+        walker: &crate::infra::walk::FileWalker,
+        root: &Path,
+        langs: &LanguageSelector,
+    ) -> Vec<(PathBuf, String)> {
+        // Walk all files under root
+        let files = walker.walk_files(root);
+
+        // Detect languages and retain matched pairs
+        files
+            .into_iter()
+            .filter_map(|path| {
+                LanguageDetector::detect(&path).and_then(|lang| {
+                    if langs.contains(&lang) {
+                        Some((path, lang))
+                    } else {
+                        None
+                    }
+                })
+            })
+            .collect()
+    }
+}
+
+/// Simple extension-based language detector
+struct LanguageDetector;
+
+impl LanguageDetector {
+    /// Map file extensions to canonical language labels
+    fn detect(path: &Path) -> Option<String> {
+        // Get extension as lowercase string
+        let ext = path.extension()?.to_str()?.to_lowercase();
+
+        // Map common extensions to languages
+        let lang = match ext.as_str() {
+            "rs" => "rust",
+            "py" => "python",
+            "js" | "jsx" => "javascript",
+            "ts" | "tsx" => "typescript",
+            "go" => "go",
+            "c" | "h" => "c",
+            "cpp" | "cxx" | "cc" | "hpp" => "cpp",
+            _ => return None,
+        };
+
+        // Return owned language string
+        Some(lang.to_string())
+    }
+}
+
+/// Parallel symbol extraction coordinator
+struct SymbolsExecutor;
+
+impl SymbolsExecutor {
+    /// Extract symbols from all files using rayon
+    fn extract_parallel(
+        files: &[(PathBuf, String)],
+        args: &crate::cli::SymbolsArgs,
+    ) -> Result<Vec<Symbol>> {
+        // Convert to parallel iterator over file-language pairs
+        let results: Vec<Result<Vec<Symbol>>> = files
+            .par_iter()
+            .map(|(file, lang)| Self::extract_one(file, lang, &args.path))
+            .collect();
+
+        // Aggregate, short-circuiting on first error
+        let mut out = Vec::new();
+        for r in results {
+            // Propagate any error
+            let mut v = r?;
+            // Append the file’s symbols
+            out.append(&mut v);
+        }
+
+        // Return the aggregated symbols
+        Ok(out)
+    }
+
+    /// Extract symbols for a single file
+    fn extract_one(file_path: &Path, lang: &str, root: &Path) -> Result<Vec<Symbol>> {
+        // Read file contents as a single UTF-8 String
+        let content = std::fs::read_to_string(file_path)
+            .with_context(|| format!("Failed to read {}", file_path.display()))?;
+
+        // Compute the path relative to the root, if possible
+        let rel = file_path
+            .strip_prefix(root)
+            .unwrap_or(file_path)
+            .to_path_buf();
+
+        // Acquire a language-specific extractor
+        let extractor = get_extractor(lang)?;
+
+        // Run the extractor to produce raw symbols
+        let mut symbols = extractor.extract_symbols(&content, &rel)?;
+
+        // Populate language labels consistently
+        for s in &mut symbols {
+            s.lang = lang.to_string();
+        }
+
+        // Return the file’s symbols
+        Ok(symbols)
+    }
+}
+
+/// Map byte offsets to line numbers efficiently
+struct LineNumberMapper;
+
+impl LineNumberMapper {
+    /// Compute and assign line numbers for all symbols
+    fn fill_lines(symbols: &mut [Symbol]) -> Result<()> {
+        // Group symbols by file to avoid re-indexing the same file
+        let mut by_file: std::collections::BTreeMap<PathBuf, Vec<usize>> =
+            std::collections::BTreeMap::new();
+
+        // Index into `symbols` for each file
+        for (i, s) in symbols.iter().enumerate() {
+            by_file.entry(s.file.clone()).or_default().push(i);
+        }
+
+        // For each file, build an index and set line numbers
+        for (file, idxs) in by_file {
+            // Read file once
+            let content = std::fs::read_to_string(&file)
+                .with_context(|| format!("Failed to re-read {}", file.display()))?;
+
+            // Build line index from content
+            let li = LineIndex::new(&content);
+
+            // Assign each symbol’s line range
+            for i in idxs {
+                let start = symbols[i].byte_start;
+                let end = symbols[i].byte_end;
+                let (sl, el) = li.byte_span_to_lines(start, end);
+                symbols[i].start_line = sl;
+                symbols[i].end_line = el;
+            }
+        }
+
+        // Done
+        Ok(())
+    }
+}
+
+/// Immutable index of line start byte offsets
+struct LineIndex {
+    /// Full text slice for length context
+    text_len: usize,
+    /// Byte offsets for each line start
+    starts: Vec<usize>,
+}
+
+impl LineIndex {
+    /// Build a line index by scanning once
+    fn new(text: &str) -> Self {
+        // Initialize with first line at byte 0
+        let mut starts = Vec::with_capacity(128);
+        starts.push(0);
+
+        // Record every newline boundary
+        for (i, ch) in text.char_indices() {
+            if ch == '\n' {
+                starts.push(i + 1);
+            }
+        }
+
+        // Construct the index
+        Self {
+            text_len: text.len(),
+            starts,
+        }
+    }
+
+    /// Convert a byte span into 1-based line numbers
+    fn byte_span_to_lines(&self, s: usize, e: usize) -> (usize, usize) {
+        // Clamp to valid range
+        let start = s.min(self.text_len);
+        let end = e.min(self.text_len);
+
+        // Find start line via binary search
+        let sl = self.byte_to_line(start);
+        // Find end line via binary search
+        let el = self.byte_to_line(end.saturating_sub(1));
+
+        // Return 1-based line numbers
+        (sl, el)
+    }
+
+    /// Convert a single byte offset to a 1-based line number
+    fn byte_to_line(&self, b: usize) -> usize {
+```
+
+// File: src/core/symbols.rs (lines 401-571)
+```rust
+        // Binary search the greatest line start <= b
+        match self.starts.binary_search(&b) {
+            Ok(idx) => idx + 1,
+            Err(pos) => pos.max(1),
+        }
+    }
+}
+
+/// Filter utilities for visibility post-processing
+struct VisibilityFilter;
+
+impl VisibilityFilter {
+    /// Keep only symbols that are public or unspecified
+    fn retain_public(v: &mut Vec<Symbol>) {
+        // Retain when visibility is None or explicitly Public
+        v.retain(|s| matches!(&s.visibility, None | Some(Visibility::Public)));
+    }
+}
+
+/// Stream symbols to a JSON Lines file
+struct JsonlWriter;
+
+impl JsonlWriter {
+    /// Write one JSON object per line into `output_path`
+    fn write(symbols: &[Symbol], output_path: &Path) -> Result<()> {
+        // Create the destination file
+        let file = File::create(output_path)
+            .with_context(|| format!("Failed to create {}", output_path.display()))?;
+
+        // Use a buffered writer for throughput
+        let mut writer = BufWriter::new(file);
+
+        // Serialize and write each symbol as a single line
+        for s in symbols {
+            let json = serde_json::to_string(s).context("Failed to serialize symbol")?;
+            writer
+                .write_all(json.as_bytes())
+                .context("Failed to write symbol")?;
+            writer.write_all(b"\n").context("Failed to write newline")?;
+        }
+
+        // Ensure all bytes are flushed to disk
+        writer.flush().context("Failed to flush output")?;
+
+        // Done
+        Ok(())
+    }
+}
+
+// Simple extractor registry
+pub fn get_extractor(lang: &str) -> anyhow::Result<Box<dyn SymbolExtractor + Send + Sync>> {
+    match lang {
+        "rust" => Ok(Box::new(RustExtractor::new()?)),
+        "python" => Ok(Box::new(PythonExtractor::new()?)),
+        _ => Err(anyhow::anyhow!("Unsupported language: {}", lang)),
+    }
+}
+
+pub trait SymbolExtractor {
+    fn extract_symbols(
+        &self,
+        content: &str,
+        file_path: &std::path::Path,
+    ) -> anyhow::Result<Vec<Symbol>>;
+}
+
+// Helper function for qualified name building
+pub fn build_qualified_name(parts: &[&str]) -> String {
+    parts.join("::")
+}
+
+// Helper function for visibility parsing
+pub fn parse_visibility(text: &str) -> Option<Visibility> {
+    match text.trim() {
+        "pub" | "public" => Some(Visibility::Public),
+        "private" | "priv" => Some(Visibility::Private),
+        "protected" => Some(Visibility::Protected),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // Bring everything from the outer scope
+    use super::*;
+
+    /// Verify extension-to-language mapping
+    #[test]
+    fn language_detection_matrix() {
+        // Basic positive cases
+        assert_eq!(
+            LanguageDetector::detect(Path::new("a.rs")),
+            Some("rust".into())
+        );
+        assert_eq!(
+            LanguageDetector::detect(Path::new("b.py")),
+            Some("python".into())
+        );
+        assert_eq!(
+            LanguageDetector::detect(Path::new("c.tsx")),
+            Some("typescript".into())
+        );
+        assert_eq!(
+            LanguageDetector::detect(Path::new("d.jsx")),
+            Some("javascript".into())
+        );
+
+        // Negative case
+        assert_eq!(LanguageDetector::detect(Path::new("e.unknown")), None);
+    }
+
+    /// Verify line mapping on a small sample
+    #[test]
+    fn line_index_maps_spans() {
+        // Build a small 3-line text
+        let text = "line1\nline2\nline3\n";
+
+        // Create index
+        let idx = LineIndex::new(text);
+
+        // Span for "line1"
+        assert_eq!(idx.byte_span_to_lines(0, 5), (1, 1));
+
+        // Span for "line2"
+        assert_eq!(idx.byte_span_to_lines(6, 11), (2, 2));
+
+        // Span covering lines 2..3
+        assert_eq!(idx.byte_span_to_lines(6, 17), (2, 3));
+    }
+
+    /// Verify JSONL writer produces one line per symbol
+    #[test]
+    fn jsonl_writer_emits_one_line_per_symbol() -> Result<()> {
+        // Build a couple of simple symbols
+        let base = Symbol {
+            file: PathBuf::from("src/lib.rs"),
+            lang: "rust".into(),
+            kind: SymbolKind::Function,
+            name: "f".into(),
+            qualified_name: "crate::f".into(),
+            byte_start: 0,
+            byte_end: 10,
+            start_line: 1,
+            end_line: 1,
+            visibility: Some(Visibility::Public),
+            doc: None,
+        };
+
+        // Clone with small changes
+        let mut items = vec![base.clone()];
+        let mut b = base.clone();
+        b.name = "g".into();
+        b.qualified_name = "crate::g".into();
+        items.push(b);
+
+        // Write to a temp file
+        let dir = tempfile::TempDir::new()?;
+        let out = dir.path().join("symbols.jsonl");
+        JsonlWriter::write(&items, &out)?;
+
+        // Read back and count lines
+        let data = std::fs::read_to_string(&out)?;
+        let n = data.lines().count();
+
+        // Expect one line per symbol
+        assert_eq!(n, 2);
+
+        // Done
+        Ok(())
+    }
+}
+```
+
+// File: src/parsers/rust_parser.rs (lines 1-200)
+```rust
+//! Filepath: src/parsers/rust_extractor.rs
+
+use anyhow::{Context, Result};
+use std::path::Path;
+use tree_sitter::{Language, Node, Parser, Query, QueryCursor, StreamingIterator};
+
+use crate::core::symbols::{
+    Symbol, SymbolExtractor, SymbolKind, Visibility, build_qualified_name, parse_visibility,
+};
+
+pub struct RustExtractor {
+    language: Language,
+    // One resilient query that captures item *nodes* only; we compute names/vis later.
+    items_query: Query,
+}
+
+impl RustExtractor {
+    pub fn new() -> Result<Self> {
+        let language = tree_sitter_rust::LANGUAGE.into();
+
+        // Avoid field-name constraints like `visibility:` which differ across grammar versions.
+        // We capture the item nodes themselves (and inner function_item inside impl/trait for methods).
+        let items_query_src = r#"
+            (function_item) @function
+            (struct_item)   @struct
+            (enum_item)     @enum
+            (trait_item)    @trait
+            (type_item)     @type_alias
+            (const_item)    @constant
+            (static_item)   @static
+            (mod_item)      @module
+
+            (impl_item
+              (declaration_list (function_item) @method))
+            (trait_item
+              (declaration_list (function_item) @trait_method))
+        "#;
+
+        let items_query =
+            Query::new(&language, items_query_src).context("create Rust items query")?;
+        Ok(Self {
+            language,
+            items_query,
+        })
+    }
+}
+
+impl SymbolExtractor for RustExtractor {
+    fn extract_symbols(&self, content: &str, file_path: &Path) -> Result<Vec<Symbol>> {
+        let mut parser = Parser::new();
+        parser.set_language(&self.language)?;
+
+        let tree = parser
+            .parse(content, None)
+            .ok_or_else(|| anyhow::anyhow!("Failed to parse Rust source"))?;
+        let bytes = content.as_bytes();
+
+        let mut cursor = QueryCursor::new();
+        let mut matches = cursor.matches(&self.items_query, tree.root_node(), bytes);
+
+        let cap_names: Vec<&str> = self.items_query.capture_names().to_vec();
+
+        let mut out = Vec::new();
+
+        while let Some(m) = matches.next() {
+            let mut picked: Option<(&str, Node)> = None;
+
+            for cap in m.captures {
+                let cname = cap_names[cap.index as usize];
+
+                if matches!(
+                    cname,
+                    "function"
+                        | "struct"
+                        | "enum"
+                        | "trait"
+                        | "type_alias"
+                        | "constant"
+                        | "static"
+                        | "module"
+                        | "method"
+                        | "trait_method"
+                ) {
+                    picked = Some((cname, cap.node));
+                    break;
+                }
+            }
+
+            let Some((cname, node)) = picked else {
+                continue;
+            };
+
+            let is_in_impl = has_ancestor(node, "impl_item");
+            let is_in_trait = has_ancestor(node, "trait_item");
+
+            let kind = match (cname, is_in_impl, is_in_trait) {
+                ("function", false, false) => Some(SymbolKind::Function),
+
+                ("method" | "trait_method", _, _) => Some(SymbolKind::Method),
+
+                // Skip: Treated as method
+                ("function", true, _) => None,
+
+                // Skip: Treated as method
+                ("function", _, true) => None,
+
+                ("struct", ..) => Some(SymbolKind::Struct),
+
+                ("enum", ..) => Some(SymbolKind::Enum),
+
+                ("trait", ..) => Some(SymbolKind::Trait),
+
+                ("type_alias", ..) => Some(SymbolKind::TypeAlias),
+
+                ("constant", ..) => Some(SymbolKind::Constant),
+
+                ("static", ..) => Some(SymbolKind::Variable),
+
+                ("module", ..) => Some(SymbolKind::Module),
+
+                _ => None,
+            };
+
+            if let Some(kind) = kind
+                && let Some(sym) = build_symbol(kind, node, bytes, file_path)
+            {
+                out.push(sym);
+            }
+        }
+
+        Ok(out)
+    }
+}
+
+fn build_symbol(kind: SymbolKind, node: Node, bytes: &[u8], file: &Path) -> Option<Symbol> {
+    let name = name_of(node, bytes)?;
+    let visibility = visibility_of(node, bytes);
+
+    // Qualified name assembly:
+    // - Methods: use owner from enclosing impl/trait.
+    // - Others: prefix with enclosing module path (crate::a::b::Name).
+    let qualified_name = if kind == SymbolKind::Method {
+        if let Some(owner) = owner_of_method(node, bytes) {
+            build_qualified_name(&[&owner, &name])
+        } else {
+            name.clone()
+        }
+    } else {
+        let module_path = enclosing_module_path(node, bytes);
+        if module_path.is_empty() {
+            name.clone()
+        } else {
+            build_qualified_name(&[&module_path, &name])
+        }
+    };
+
+    let doc = gather_leading_rust_docs(node, bytes);
+
+    let start = node.start_position();
+    let end = node.end_position();
+
+    Some(Symbol {
+        file: file.to_path_buf(),
+        lang: "rust".to_string(),
+        kind,
+        name,
+        qualified_name,
+        byte_start: node.start_byte(),
+        byte_end: node.end_byte(),
+        start_line: start.row + 1,
+        end_line: end.row + 1,
+        visibility,
+        doc,
+    })
+}
+
+fn has_ancestor(mut node: Node, kind: &str) -> bool {
+    while let Some(p) = node.parent() {
+        if p.kind() == kind {
+            return true;
+        }
+        node = p;
+    }
+    false
+}
+
+fn first_named_child_text<'a>(node: Node<'a>, bytes: &[u8], kinds: &[&str]) -> Option<String> {
+    for i in 0..node.named_child_count() {
+        let c = node.named_child(i)?;
+        if kinds.contains(&c.kind()) {
+            return Some(c.utf8_text(bytes).ok()?.to_string());
+        }
+    }
+    None
+}
+
+fn name_of(node: Node, bytes: &[u8]) -> Option<String> {
+    if let Some(n) = node.child_by_field_name("name") {
+        return n.utf8_text(bytes).ok().map(|s| s.to_string());
+    }
+```
+
+// File: src/parsers/rust_parser.rs (lines 201-400)
+```rust
+    // Fallbacks for common declaration shapes
+    first_named_child_text(node, bytes, &["identifier", "type_identifier"])
+}
+
+fn visibility_of(node: Node, bytes: &[u8]) -> Option<Visibility> {
+    for i in 0..node.named_child_count() {
+        let c = node.named_child(i)?;
+        if c.kind() == "visibility_modifier"
+            && let Ok(t) = c.utf8_text(bytes)
+        {
+            return parse_visibility(t);
+        }
+    }
+    None
+}
+
+fn owner_of_method(mut node: Node, bytes: &[u8]) -> Option<String> {
+    // Walk up to impl_item or trait_item, then extract the type or trait name.
+    while let Some(p) = node.parent() {
+        match p.kind() {
+            "impl_item" => {
+                if let Some(t) = p.child_by_field_name("type") {
+                    return t.utf8_text(bytes).ok().map(|s| s.to_string());
+                }
+                // Fallbacks to get something readable like `u32`, `a::b::Baz<T>`, etc.
+                return first_named_child_text(
+                    p,
+                    bytes,
+                    &[
+                        "type_identifier",
+                        "scoped_type_identifier",
+                        "generic_type",
+                        "primitive_type",
+                        "tuple_type",
+                        "reference_type",
+                    ],
+                );
+            }
+            "trait_item" => {
+                if let Some(n) = p.child_by_field_name("name") {
+                    return n.utf8_text(bytes).ok().map(|s| s.to_string());
+                }
+                return first_named_child_text(p, bytes, &["type_identifier"]);
+            }
+            _ => {
+                node = p;
+            }
+        }
+    }
+    None
+}
+
+fn enclosing_module_path(mut node: Node, bytes: &[u8]) -> String {
+    let mut parts = Vec::new();
+    while let Some(parent) = node.parent() {
+        if parent.kind() == "mod_item"
+            && let Some(name_node) = parent.child_by_field_name("name")
+            && let Ok(t) = name_node.utf8_text(bytes)
+            && !t.is_empty()
+        {
+            parts.push(t.to_string());
+        }
+        node = parent;
+    }
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "crate::{}",
+            parts.into_iter().rev().collect::<Vec<_>>().join("::")
+        )
+    }
+}
+
+fn gather_leading_rust_docs(node: Node, bytes: &[u8]) -> Option<String> {
+    let mut acc: Vec<String> = Vec::new();
+    let mut cur = node;
+    while let Some(prev) = cur.prev_sibling() {
+        match prev.kind() {
+            "line_comment" => {
+                let t = prev.utf8_text(bytes).unwrap_or_default().trim();
+                if let Some(stripped) = t.strip_prefix("///") {
+                    acc.push(stripped.trim().to_string());
+                    cur = prev;
+                    continue;
+                }
+            }
+            "block_comment" => {
+                let t = prev.utf8_text(bytes).unwrap_or_default();
+                if t.starts_with("/**") {
+                    let body = t.trim_start_matches("/**").trim_end_matches("*/").trim();
+                    if !body.is_empty() {
+                        acc.push(body.to_string());
+                    }
+                    cur = prev;
+                    continue;
+                }
+            }
+            _ => {}
+        }
+        break;
+    }
+    if acc.is_empty() {
+        None
+    } else {
+        acc.reverse();
+        Some(acc.join("\n"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::*;
+    use crate::core::symbols::{Symbol, SymbolKind};
+
+    fn has(sym: &Symbol, kind: SymbolKind, name: &str) -> bool {
+        sym.kind == kind && sym.name == name
+    }
+
+    fn get<'a>(syms: &'a [Symbol], kind: SymbolKind, name: &str) -> &'a Symbol {
+        syms.iter()
+            .find(|s| has(s, kind.clone(), name))
+            .expect("symbol not found")
+    }
+
+    #[test]
+    fn rust_functions_and_docs() -> Result<()> {
+        let extractor = RustExtractor::new()?;
+        let src = r#"
+/// First Line
+/// Second Line
+pub fn hello_world() {}
+
+fn private_fn() {}
+"#;
+        let file = PathBuf::from("test.rs");
+        let mut syms = extractor.extract_symbols(src, &file)?;
+        syms.sort_by_key(|s| (s.start_line, s.name.clone()));
+
+        let pub_fn = get(&syms, SymbolKind::Function, "hello_world");
+        assert_eq!(pub_fn.doc.as_deref(), Some("First Line\nSecond Line"));
+        assert!(pub_fn.start_line >= 1 && pub_fn.end_line >= pub_fn.start_line);
+
+        let priv_fn = get(&syms, SymbolKind::Function, "private_fn");
+        assert!(priv_fn.doc.is_none());
+
+        Ok(())
+    }
+
+    #[test]
+    fn rust_struct_and_docs() -> Result<()> {
+        let extractor = RustExtractor::new()?;
+        let src = r#"
+/**
+Block doc A
+Block doc B
+*/
+struct S;
+"#;
+        let file = PathBuf::from("test.rs");
+        let syms = extractor.extract_symbols(src, &file)?;
+        let s = get(&syms, SymbolKind::Struct, "S");
+        assert_eq!(s.doc.as_deref(), Some("Block doc A\nBlock doc B"));
+        Ok(())
+    }
+
+    #[test]
+    fn symbol_kinds_covered() -> Result<()> {
+        let extractor = RustExtractor::new()?;
+        let src = r#"
+struct A;
+enum E { X }
+trait T {}
+type Alias = u32;
+const C: u8 = 1;
+static S0: i32 = 0;
+mod m {}
+"#;
+        let file = PathBuf::from("test.rs");
+        let syms = extractor.extract_symbols(src, &file)?;
+        assert!(syms.iter().any(|s| has(s, SymbolKind::Struct, "A")));
+        assert!(syms.iter().any(|s| has(s, SymbolKind::Enum, "E")));
+        assert!(syms.iter().any(|s| has(s, SymbolKind::Trait, "T")));
+        assert!(syms.iter().any(|s| has(s, SymbolKind::TypeAlias, "Alias")));
+        assert!(syms.iter().any(|s| has(s, SymbolKind::Constant, "C")));
+        assert!(syms.iter().any(|s| has(s, SymbolKind::Variable, "S0")));
+        assert!(syms.iter().any(|s| has(s, SymbolKind::Module, "m")));
+        Ok(())
+    }
+
+    #[test]
+    fn impl_methods_and_qualification_variants() -> Result<()> {
+        let extractor = RustExtractor::new()?;
+        let src = r#"
+mod a { pub mod b { pub struct Baz<T>(T); } }
+impl<T> a::b::Baz<T> {
+    pub fn y() {} 
+    fn z() {}
+```
+
+// File: src/parsers/rust_parser.rs (lines 401-459)
+```rust
+}
+impl u32 {
+    fn x() {}
+}
+"#;
+        let file = PathBuf::from("test.rs");
+        let syms = extractor.extract_symbols(src, &file)?;
+
+        let y = syms
+            .iter()
+            .find(|s| s.kind == SymbolKind::Method && s.name == "y")
+            .unwrap();
+        assert!(y.qualified_name.contains("Baz"));
+
+        let z = syms
+            .iter()
+            .find(|s| s.kind == SymbolKind::Method && s.name == "z")
+            .unwrap();
+        assert!(z.qualified_name.contains("Baz"));
+
+        let x = syms
+            .iter()
+            .find(|s| s.kind == SymbolKind::Method && s.name == "x")
+            .unwrap();
+        assert!(x.qualified_name.contains("u32"));
+        Ok(())
+    }
+
+    #[test]
+    fn trait_default_methods() -> Result<()> {
+        let extractor = RustExtractor::new()?;
+        let src = r#"
+trait MyTrait {
+    fn defaulted() {}
+}
+"#;
+        let file = PathBuf::from("test.rs");
+        let syms = extractor.extract_symbols(src, &file)?;
+        let m = syms
+            .iter()
+            .find(|s| s.kind == SymbolKind::Method && s.name == "defaulted")
+            .unwrap();
+        assert!(m.qualified_name.contains("MyTrait"));
+        Ok(())
+    }
+
+    #[test]
+    fn nested_modules_qualification() -> Result<()> {
+        let extractor = RustExtractor::new()?;
+        let src = r#"
+mod a { mod b { fn f() {} } }
+"#;
+        let file = PathBuf::from("test.rs");
+        let syms = extractor.extract_symbols(src, &file)?;
+        let f = get(&syms, SymbolKind::Function, "f");
+        assert!(f.qualified_name.ends_with("crate::a::b::f"));
+        Ok(())
+    }
+}
+```
+
+// File: src/parsers/python_parser.rs (lines 1-200)
+```rust
+//! Filepath: src/parsers/python_parser.rs
+//! ------------------------------------------------------------------
+//! Python symbol extractor built on Tree-sitter 0.25.x.
+//! Goals:
+//!   - Use broad, stable queries (no fragile field predicates).
+//!   - Classify methods by ancestry (avoid duplicate matches).
+//!   - Extract PEP 257 docstrings (first statement string).
+//!   - Build qualified names for methods (A::B::m).
+//!   - Be careful with allocations and streaming iteration.
+//!
+//! Notes:
+//!   - We only query for functions and classes. Methods are
+//!     determined by detecting a surrounding class_definition.
+//!   - We always pass the same byte slice that Parser parsed.
+//!   - We rely on tree_sitter::StreamingIterator for matches.
+//!   - Docstrings support single/triple quotes and common
+//!     prefixes (r, u, f, fr, rf). Dedent is applied for
+//!     triple-quoted docs. Concatenated string docstrings are
+//!     joined segment-wise.
+//! ------------------------------------------------------------------
+
+use anyhow::{Context, Result, anyhow};
+use std::path::Path;
+use tree_sitter::{Language, Node, Parser, Query, QueryCursor, StreamingIterator};
+
+use crate::core::symbols::{Symbol, SymbolExtractor, SymbolKind, Visibility};
+
+/// Extracts Python symbols (functions, classes, methods).
+pub struct PythonExtractor {
+    /// Python language handle for Tree-sitter.
+    language: Language,
+    /// Broad, stable query capturing defs and class defs.
+    query: Query,
+}
+
+impl PythonExtractor {
+    /// Construct a new extractor with a broad query that
+    /// captures function_definition and class_definition.
+    pub fn new() -> Result<Self> {
+        // Obtain the Tree-sitter language for Python.
+        let language = tree_sitter_python::LANGUAGE.into();
+
+        // Keep queries broad; avoid grammar field predicates
+        // that tend to change across minor versions.
+        let query_src = r#"
+            (function_definition
+              name: (identifier) @name) @item
+
+            (class_definition
+              name: (identifier) @name) @item
+        "#;
+
+        // Compile the query once for reuse in extraction.
+        let query = Query::new(&language, query_src).context("create Python query")?;
+
+        Ok(Self { language, query })
+    }
+}
+
+impl SymbolExtractor for PythonExtractor {
+    /// Parse `content`, run the query, derive symbol data, and
+    /// return a flat list of symbols defined in the file.
+    fn extract_symbols(&self, content: &str, file_path: &Path) -> Result<Vec<Symbol>> {
+        // Create a parser instance and set the language.
+        let mut parser = Parser::new();
+        parser
+            .set_language(&self.language)
+            .context("set Python language")?;
+
+        // Parse the source; fail if no tree is produced.
+        let tree = parser
+            .parse(content, None)
+            .ok_or_else(|| anyhow!("Failed to parse Python source"))?;
+
+        // Use the same bytes slice for all utf8_text calls.
+        let bytes = content.as_bytes();
+
+        // Prepare a query cursor and stream matches.
+        let mut cursor = QueryCursor::new();
+        let mut matches = cursor.matches(&self.query, tree.root_node(), bytes);
+
+        // Capture names vector for fast index lookup.
+        let cap_names: Vec<&str> = self.query.capture_names().to_vec();
+
+        // Pre-allocate a small buffer to reduce reallocations.
+        let mut out = Vec::with_capacity(16);
+
+        // Iterate streaming matches properly with .next().
+        while let Some(m) = matches.next() {
+            // Selected captured node of interest and its name.
+            let mut picked: Option<Node> = None;
+            let mut name_text: Option<String> = None;
+
+            // Process all captures in this match.
+            for cap in m.captures {
+                // Map capture index to its name string.
+                let cname = cap_names[cap.index as usize];
+
+                // The structural node (function/class) is @item.
+                if cname == "item" {
+                    picked = Some(cap.node);
+                    continue;
+                }
+
+                // The identifier for the symbol is @name.
+                if cname == "name" {
+                    name_text = cap.node.utf8_text(bytes).ok().map(|s| s.to_string());
+                    continue;
+                }
+            }
+
+            // Skip malformed matches lacking structure or name.
+            let Some(node) = picked else { continue };
+            let Some(name) = name_text else { continue };
+
+            // Classify as Method if nested in a class; else
+            // Function for function_definition or Class for
+            // class_definition. Avoid duplicates by not having
+            // a separate "method" query pattern.
+            let kind = match node.kind() {
+                "function_definition" => {
+                    if has_ancestor(node, "class_definition") {
+                        SymbolKind::Method
+                    } else {
+                        SymbolKind::Function
+                    }
+                }
+                "class_definition" => SymbolKind::Class,
+                _ => continue,
+            };
+
+            // Build a qualified name. For methods we climb the
+            // class chain. For top-level items, keep simple name.
+            let qualified_name = if matches!(kind, SymbolKind::Method) {
+                python_qualified_name_method(node, bytes, &name)
+            } else {
+                name.clone()
+            };
+
+            // Python visibility by leading underscore policy.
+            let visibility = if name.starts_with('_') {
+                Some(Visibility::Private)
+            } else {
+                Some(Visibility::Public)
+            };
+
+            // Compute line and byte spans.
+            let start = node.start_position();
+            let end = node.end_position();
+
+            // Collect PEP 257-style docstring where present.
+            let doc = python_docstring_extract(node, bytes);
+
+            // Push the assembled symbol entry.
+            out.push(Symbol {
+                file: file_path.to_path_buf(),
+                lang: "python".to_string(),
+                kind,
+                name,
+                qualified_name,
+                byte_start: node.start_byte(),
+                byte_end: node.end_byte(),
+                start_line: start.row + 1,
+                end_line: end.row + 1,
+                visibility,
+                doc,
+            });
+        }
+
+        // Return the final symbol list.
+        Ok(out)
+    }
+}
+
+/// Build qualified method names of the form
+/// `Outer::Inner::method`, climbing ancestor classes.
+fn python_qualified_name_method(mut node: Node, bytes: &[u8], method_name: &str) -> String {
+    // Start with the innermost method name.
+    let mut parts: Vec<String> = vec![method_name.to_string()];
+
+    // Walk parents and collect class_definition names.
+    while let Some(parent) = node.parent() {
+        if parent.kind() == "class_definition"
+            && let Some(name_node) = parent.child_by_field_name("name")
+            && let Ok(cls) = name_node.utf8_text(bytes)
+        {
+            parts.push(cls.to_string());
+        }
+        node = parent;
+    }
+
+    // Reverse to outer-to-inner order and join.
+    parts.reverse();
+    parts.join("::")
+}
+
+/// Extract a PEP 257 docstring from a function/class:
+/// first statement in the body must be a string literal.
+/// Supports single/triple quotes, r/u/f prefixes, and
+/// concatenated string sequences.
+```
+
+// File: src/parsers/python_parser.rs (lines 201-400)
+```rust
+fn python_docstring_extract(node: Node, bytes: &[u8]) -> Option<String> {
+    // Obtain the block/suite node that contains statements.
+    let body = node.child_by_field_name("body")?;
+
+    // In current grammar, the body node itself is a "block"
+    // (or "suite" in older variants). Use it directly.
+    let block = if body.kind() == "block" || body.kind() == "suite" {
+        body
+    } else {
+        // Fallback: some grammars may nest blocks; try first
+        // named child that is a block/suite.
+        let mut blk = None;
+        for i in 0..body.named_child_count() {
+            let c = body.named_child(i)?;
+            if c.kind() == "block" || c.kind() == "suite" {
+                blk = Some(c);
+                break;
+            }
+        }
+        blk?
+    };
+
+    // Grab the first *named* statement (skips newlines/indent).
+    let first_stmt = block.named_child(0)?;
+    if first_stmt.kind() != "expression_statement" {
+        return None;
+    }
+
+    // The first expression should be a string literal or a
+    // concatenated_string (implicit adjacent literal concat).
+    let lit = first_stmt.named_child(0)?;
+    match lit.kind() {
+        "string" => {
+            let raw = lit.utf8_text(bytes).ok()?;
+            let text = unquote_python_string(raw);
+            Some(text)
+        }
+        "concatenated_string" => {
+            // Join each string segment after unquoting.
+            let mut acc = String::new();
+            for i in 0..lit.named_child_count() {
+                let seg = lit.named_child(i)?;
+                if seg.kind() != "string" {
+                    // Non-string in concatenation invalidates
+                    // docstring per PEP 257 expectations.
+                    return None;
+                }
+                let raw = seg.utf8_text(bytes).ok()?;
+                acc.push_str(&unquote_python_string(raw));
+            }
+            if acc.is_empty() { None } else { Some(acc) }
+        }
+        _ => None,
+    }
+}
+
+/// Strip Python string prefixes/quotes and perform a light
+/// unescape plus dedent for triple-quoted strings.
+fn unquote_python_string(s: &str) -> String {
+    // Trim leading/trailing whitespace around the literal.
+    let ss = s.trim();
+
+    // Compute prefix length (r, u, f, fr, rf; case-insensitive).
+    let pref_len = leading_alpha_len(ss);
+    let (prefix, rest) = ss.split_at(pref_len);
+
+    // Determine if raw (contains 'r' or 'R').
+    let is_raw = prefix.chars().any(|c| c == 'r' || c == 'R');
+
+    // Work with the remainder for quote detection.
+    let s2 = rest;
+
+    // Handle triple quotes first.
+    if s2.len() >= 6 {
+        if s2.starts_with(r#"""""#) && s2.ends_with(r#"""""#) {
+            let inner = &s2[3..s2.len() - 3];
+            return dedent_and_unescape(inner, is_raw);
+        }
+        if s2.starts_with("'''") && s2.ends_with("'''") {
+            let inner = &s2[3..s2.len() - 3];
+            return dedent_and_unescape(inner, is_raw);
+        }
+    }
+
+    // Handle single-quoted strings.
+    if s2.len() >= 2
+        && ((s2.starts_with('"') && s2.ends_with('"'))
+            || (s2.starts_with('\'') && s2.ends_with('\'')))
+    {
+        let inner = &s2[1..s2.len() - 1];
+        return basic_unescape(inner, is_raw);
+    }
+
+    // Fallback: return as-is.
+    s2.to_string()
+}
+
+/// Return the count of leading ASCII alphabetic chars.
+/// Used to slice off string literal prefixes.
+fn leading_alpha_len(s: &str) -> usize {
+    let mut i = 0;
+    for ch in s.chars() {
+        if ch.is_ascii_alphabetic() {
+            i += ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+    i
+}
+
+/// Dedent triple-quoted content and unescape if not raw.
+/// Also strips a single leading/trailing blank line.
+fn dedent_and_unescape(s: &str, is_raw: bool) -> String {
+    // Split into lines and drop symmetric blank edges.
+    let mut lines: Vec<&str> = s.lines().collect();
+    if !lines.is_empty() && lines[0].trim().is_empty() {
+        lines.remove(0);
+    }
+    if !lines.is_empty() && lines[lines.len() - 1].trim().is_empty() {
+        lines.pop();
+    }
+
+    // Compute common leading spaces across non-empty lines.
+    let indent = lines
+        .iter()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| l.chars().take_while(|c| *c == ' ').count())
+        .min()
+        .unwrap_or(0);
+
+    // Dedent and join with newlines.
+    let mut out = String::new();
+    for (i, l) in lines.iter().enumerate() {
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        if l.len() >= indent {
+            out.push_str(&l[indent..]);
+        } else {
+            out.push_str(l);
+        }
+        // Continue to next line.
+        let _ = i;
+    }
+
+    // Apply basic unescape only if not raw.
+    if is_raw {
+        out
+    } else {
+        basic_unescape(&out, false)
+    }
+}
+
+/// Minimal unescape for common sequences when not raw.
+/// Intended for docstrings, not general Python parsing.
+fn basic_unescape(s: &str, is_raw: bool) -> String {
+    if is_raw {
+        return s.to_string();
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut it = s.chars();
+    while let Some(c) = it.next() {
+        if c == '\\' {
+            if let Some(n) = it.next() {
+                match n {
+                    'n' => out.push('\n'),
+                    't' => out.push('\t'),
+                    'r' => out.push('\r'),
+                    '\\' => out.push('\\'),
+                    '"' => out.push('"'),
+                    '\'' => out.push('\''),
+                    _ => {
+                        out.push('\\');
+                        out.push(n);
+                    }
+                }
+            } else {
+                out.push('\\');
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Return true if `node` has an ancestor of the given kind.
+fn has_ancestor(mut node: Node, kind: &str) -> bool {
+    while let Some(p) = node.parent() {
+        if p.kind() == kind {
+            return true;
+        }
+        node = p;
+    }
+    false
+}
+
+#[cfg(test)]
+mod tests {
+```
+
+// File: src/parsers/python_parser.rs (lines 401-509)
+```rust
+    use std::path::PathBuf;
+
+    use super::*;
+    use crate::core::symbols::{Symbol, SymbolKind, Visibility};
+
+    /// Helper: predicate for kind+name match.
+    fn has(sym: &Symbol, kind: SymbolKind, name: &str) -> bool {
+        sym.kind == kind && sym.name == name
+    }
+
+    /// Helper: fetch a single symbol by kind+name.
+    fn get<'a>(syms: &'a [Symbol], kind: SymbolKind, name: &str) -> &'a Symbol {
+        syms.iter()
+            .find(|s| has(s, kind.clone(), name))
+            .expect("symbol not found")
+    }
+
+    #[test]
+    fn python_functions_public_private_and_docstring() -> Result<()> {
+        let ex = PythonExtractor::new()?;
+        let src = r#"
+def hello():
+    """Greeting"""
+    return 1
+
+def _hidden():
+    return 2
+"#;
+        let file = PathBuf::from("test.py");
+        let mut syms = ex.extract_symbols(src, &file)?;
+        syms.sort_by_key(|s| (s.start_line, s.name.clone()));
+
+        let hello = get(&syms, SymbolKind::Function, "hello");
+        assert_eq!(hello.visibility, Some(Visibility::Public));
+        assert_eq!(hello.doc.as_deref(), Some("Greeting"));
+
+        let hidden = get(&syms, SymbolKind::Function, "_hidden");
+        assert_eq!(hidden.visibility, Some(Visibility::Private));
+        Ok(())
+    }
+
+    #[test]
+    fn python_class_and_methods_with_qualified_names() -> Result<()> {
+        let ex = PythonExtractor::new()?;
+        let src = r#"
+class MyClass:
+    """C doc"""
+    def method(self):
+        """M doc"""
+        pass
+
+    def _private(self):
+        pass
+"#;
+        let file = PathBuf::from("t.py");
+        let syms = ex.extract_symbols(src, &file)?;
+
+        assert!(syms.iter().any(|s| has(s, SymbolKind::Class, "MyClass")));
+
+        let m = syms
+            .iter()
+            .find(|s| s.kind == SymbolKind::Method && s.name == "method")
+            .unwrap();
+        assert_eq!(m.qualified_name, "MyClass::method");
+        assert_eq!(m.doc.as_deref(), Some("M doc"));
+
+        let p = syms
+            .iter()
+            .find(|s| s.kind == SymbolKind::Method && s.name == "_private")
+            .unwrap();
+        assert_eq!(p.visibility, Some(Visibility::Private));
+        Ok(())
+    }
+
+    #[test]
+    fn python_nested_classes_qualified_names() -> Result<()> {
+        let ex = PythonExtractor::new()?;
+        let src = r#"
+class Outer:
+    class Inner:
+        def m(self):
+            pass
+"#;
+        let file = PathBuf::from("t.py");
+        let syms = ex.extract_symbols(src, &file)?;
+        let m = syms
+            .iter()
+            .find(|s| s.kind == SymbolKind::Method && s.name == "m")
+            .unwrap();
+        assert_eq!(m.qualified_name, "Outer::Inner::m");
+        Ok(())
+    }
+
+    #[test]
+    fn python_non_first_string_is_not_docstring() -> Result<()> {
+        let ex = PythonExtractor::new()?;
+        let src = r#"
+def f():
+    x = 1
+    "not a docstring"
+    return x
+"#;
+        let file = PathBuf::from("t.py");
+        let syms = ex.extract_symbols(src, &file)?;
+        let f = get(&syms, SymbolKind::Function, "f");
+        assert!(f.doc.is_none());
+        Ok(())
+    }
+}
+```

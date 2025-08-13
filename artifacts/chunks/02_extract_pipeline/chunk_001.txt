@@ -1,0 +1,560 @@
+// File: src/core/extract/mod.rs (lines 1-224)
+```rust
+//! Line-range extraction with gitignore awareness and memory mapping.
+
+pub mod target;
+
+pub use target::ExtractionTarget;
+
+use anyhow::{Context, Result};
+use indicatif::{ProgressBar, ProgressStyle};
+use owo_colors::OwoColorize;
+use rayon::prelude::*;
+use std::path::Path;
+
+use crate::cli::ExtractArgs;
+use crate::infra::io::{extract_lines, read_file_smart};
+
+pub fn run(args: ExtractArgs, global_dry_run: bool) -> Result<()> {
+    // Parse extraction targets using robust Windows-aware parser
+    let targets: Result<Vec<_>> = args
+        .targets
+        .iter()
+        .map(|t| ExtractionTarget::parse(t))
+        .collect();
+    let targets = targets?;
+
+    if targets.is_empty() {
+        anyhow::bail!("No extraction targets specified");
+    }
+
+    // Set up progress bar
+    let progress = ProgressBar::new(targets.len() as u64);
+    progress.set_style(
+        ProgressStyle::default_bar()
+            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} {msg}")
+            .unwrap()
+            .progress_chars("#>-"),
+    );
+
+    // Process in parallel with order preserved in collect
+    let pieces: Vec<Result<String>> = targets
+        .par_iter()
+        .map(|target| {
+            // Read file (mmap > 1MB, else read_to_string)
+            let content = read_file_smart(&target.file)
+                .with_context(|| format!("Failed to read file: {}", target.file.display()))?;
+
+            // Extract merged ranges with LF/CRLF-safe slicing
+            let body = extract_lines(content.as_ref(), &target.ranges)
+                .with_context(|| format!("Failed to extract lines from {}", target.file.display()))?;
+
+            // Optional formatting (annotate/fence/…)
+            let formatted = format_extraction(
+                target.file.as_path(),
+                &target.ranges,
+                &body,
+                args.annotate,
+                args.fence,
+            );
+
+            // Update progress (best-effort, thread-safe)
+            progress.inc(1);
+            progress.set_message(format!("Processed {}", target.file.display()));
+
+            Ok(formatted)
+        })
+        .collect();
+
+    progress.finish_with_message("Extraction complete");
+
+    // Combine results in original CLI order
+    let mut final_content = String::new();
+    for piece in pieces {
+        let s = piece?;
+        // Separate files with a single newline
+        if !final_content.is_empty() {
+            final_content.push('\n');
+        }
+        final_content.push_str(&s);
+    }
+
+    // Write output
+    let dry_run = args.dry_run || global_dry_run;
+    if !dry_run {
+        std::fs::write(&args.output, &final_content)
+            .with_context(|| format!("Failed to write to {}", args.output.display()))?;
+    }
+
+    if args.clipboard && !dry_run {
+        copy_to_clipboard(&final_content)?;
+    }
+
+    if dry_run {
+        println!("{}", "DRY RUN: Would extract:".yellow());
+        for target in &targets {
+            println!("  {} (lines {:?})", target.file.display(), target.ranges);
+        }
+        println!(
+            "{}",
+            format!(
+                "Would write {} bytes to {}",
+                final_content.len(),
+                args.output.display()
+            )
+            .yellow()
+        );
+    } else {
+        println!(
+            "{} Extracted {} bytes to {}",
+            "✓".green(),
+            final_content.len(),
+            args.output.display()
+        );
+    }
+
+    Ok(())
+}
+
+fn format_extraction(
+    file: &Path,
+    ranges: &[(usize, usize)],
+    content: &str,
+    annotate: bool,
+    fence: bool,
+) -> String {
+    let mut result = String::new();
+
+    if annotate {
+        let ranges_str = ranges
+            .iter()
+            .map(|(start, end)| {
+                if start == end {
+                    start.to_string()
+                } else {
+                    format!("{}-{}", start, end)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+
+        result.push_str(&format!(
+            "// File: {} (lines {})\n",
+            file.display(),
+            ranges_str
+        ));
+    }
+
+    if fence {
+        // Try to detect language from file extension
+        let lang = file
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| match ext {
+                "rs" => "rust",
+                "py" => "python",
+                "js" | "jsx" => "javascript",
+                "ts" | "tsx" => "typescript",
+                "go" => "go",
+                "c" | "h" => "c",
+                "cpp" | "cxx" | "cc" | "hpp" => "cpp",
+                _ => ext,
+            })
+            .unwrap_or("");
+
+        result.push_str(&format!("```{}\n", lang));
+        result.push_str(content);
+        if !content.ends_with('\n') {
+            result.push('\n');
+        }
+        result.push_str("```\n");
+    } else {
+        result.push_str(content);
+    }
+
+    result
+}
+
+fn copy_to_clipboard(content: &str) -> Result<()> {
+    use arboard::Clipboard;
+
+    let mut clipboard = Clipboard::new().context("Failed to access clipboard")?;
+
+    clipboard
+        .set_text(content)
+        .context("Failed to copy to clipboard")?;
+
+    println!("{} Copied to clipboard", "✓".green());
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_extraction_target() {
+        let target = ExtractionTarget::parse("src/main.rs:10-20,25,30-35").unwrap();
+        assert_eq!(target.file, std::path::PathBuf::from("src/main.rs"));
+        assert_eq!(target.ranges, vec![(10, 20), (25, 25), (30, 35)]);
+    }
+
+    #[test]
+    fn test_parse_single_line() {
+        let target = ExtractionTarget::parse("test.rs:42").unwrap();
+        assert_eq!(target.ranges, vec![(42, 42)]);
+    }
+
+    #[test]
+    fn test_parse_windows_path() {
+        let target = ExtractionTarget::parse(r"C:\work\repo\src\lib.rs:3-4,10").unwrap();
+        assert_eq!(target.file, std::path::PathBuf::from(r"C:\work\repo\src\lib.rs"));
+        assert_eq!(target.ranges, vec![(3, 4), (10, 10)]);
+    }
+
+    #[test]
+    fn test_parse_invalid_format() {
+        assert!(ExtractionTarget::parse("invalid").is_err());
+        assert!(ExtractionTarget::parse("file:invalid-range").is_err());
+    }
+
+    #[test]
+    fn test_adjacent_range_merge() {
+        let target = ExtractionTarget::parse("src/x.rs:1-5,6-10").unwrap();
+        assert_eq!(target.ranges, vec![(1, 10)]); // Merged adjacent ranges
+    }
+}
+```
+
+// File: src/core/extract/target.rs (lines 1-98)
+```rust
+//! Robust parsing for "<path>:<ranges>" with Windows support.
+
+use anyhow::{Context, Result, bail};
+use std::path::PathBuf;
+
+/// Single extraction target: one file + merged line ranges.
+#[derive(Debug, Clone)]
+pub struct ExtractionTarget {
+    /// File path as provided (for display/ordering).
+    pub file: PathBuf,
+    /// Inclusive 1-based line ranges, merged and sorted.
+    pub ranges: Vec<(usize, usize)>,
+}
+
+impl ExtractionTarget {
+    /// Parse a target string like
+    /// "src/main.rs:1-5,10-15" or "C:\\src\\lib.rs:20-25".
+    pub fn parse(input: &str) -> Result<Self> {
+        // Normalize and trim surrounding whitespace
+        let s = input.trim();
+
+        // Split from the right once to avoid breaking "C:\..."
+        // This yields: [<ranges>, <path>] in reverse order.
+        let mut it = s.rsplitn(2, ':');
+
+        // Extract the tail part: ranges spec
+        let ranges_str = it.next().context("missing range spec after ':'")?.trim();
+
+        // Extract the head part: path string
+        let path_str = it.next().context("missing file path before ':'")?.trim();
+
+        // Build a PathBuf preserving the user's spelling
+        let file = PathBuf::from(path_str);
+
+        // Parse the comma-separated ranges
+        let mut ranges: Vec<(usize, usize)> = Vec::new();
+        for seg in ranges_str.split(',') {
+            let seg = seg.trim();
+            if seg.is_empty() {
+                continue;
+            }
+            // Support "N" and "A-B" patterns
+            if let Some((a, b)) = seg.split_once('-') {
+                let a: usize = a
+                    .trim()
+                    .parse()
+                    .with_context(|| format!("invalid start: {seg}"))?;
+                let b: usize = b
+                    .trim()
+                    .parse()
+                    .with_context(|| format!("invalid end: {seg}"))?;
+
+                if a == 0 || b == 0 {
+                    bail!("line numbers must be >= 1: {seg}");
+                }
+
+                if a > b {
+                    bail!("start > end in range: {seg}");
+                }
+                ranges.push((a, b));
+            } else {
+                let n: usize = seg
+                    .parse()
+                    .with_context(|| format!("invalid line: {seg}"))?;
+                if n == 0 {
+                    bail!("line numbers must be >= 1: {seg}");
+                }
+                ranges.push((n, n));
+            }
+        }
+
+        // Require at least one range
+        if ranges.is_empty() {
+            bail!("no valid ranges in: {input}");
+        }
+
+        // Merge and sort to avoid redundant work
+        ranges.sort_unstable_by_key(|r| r.0);
+        let mut merged: Vec<(usize, usize)> = Vec::with_capacity(ranges.len());
+
+        for (s, e) in ranges {
+            if let Some(last) = merged.last_mut()
+                && s <= last.1 + 1
+            {
+                last.1 = last.1.max(e);
+                continue;
+            }
+
+            merged.push((s, e));
+        }
+
+        // Emit normalized target
+        Ok(Self {
+            file,
+            ranges: merged,
+        })
+    }
+}
+```
+
+// File: src/infra/io.rs (lines 1-157)
+```rust
+use anyhow::{Context, Result};
+use memmap2::Mmap;
+use std::fs::File;
+use std::path::Path;
+
+const MMAP_THRESHOLD: u64 = 1024 * 1024; // 1 MiB
+
+pub enum FileContent {
+    Mapped(Mmap),
+    Buffered(String),
+}
+
+impl AsRef<str> for FileContent {
+    fn as_ref(&self) -> &str {
+        match self {
+            FileContent::Mapped(mmap) => {
+                // Safety: We assume the file contains valid UTF-8
+                // In production, we should handle invalid UTF-8 gracefully
+                std::str::from_utf8(mmap).unwrap_or("")
+            }
+            FileContent::Buffered(s) => s.as_str(),
+        }
+    }
+}
+
+pub fn read_file_smart<P: AsRef<Path>>(path: P) -> Result<FileContent> {
+    let path = path.as_ref();
+    let metadata = std::fs::metadata(path)
+        .with_context(|| format!("Failed to read metadata for {}", path.display()))?;
+
+    if metadata.len() > MMAP_THRESHOLD {
+        // Use memory mapping for large files
+        let file =
+            File::open(path).with_context(|| format!("Failed to open file {}", path.display()))?;
+
+        // Safety: We're only reading the file, not modifying it
+        let mmap = unsafe { Mmap::map(&file) }
+            .with_context(|| format!("Failed to memory-map {}", path.display()))?;
+
+        Ok(FileContent::Mapped(mmap))
+    } else {
+        // Read small files into memory
+        let content = std::fs::read_to_string(path)
+            .with_context(|| format!("Failed to read file {}", path.display()))?;
+
+        Ok(FileContent::Buffered(content))
+    }
+}
+
+/// Extract inclusive 1-based line ranges as a single String.
+/// Ranges must be validated and merged by the caller.
+pub fn extract_lines(
+    content: &str,
+    ranges: &[(usize, usize)],
+) -> Result<String> {
+    // Work in bytes; validate once then slice cheaply
+    let bytes = content.as_bytes();
+
+    // Build index once per file
+    let idx = crate::infra::line_index::NewlineIndex::build(bytes);
+
+    // Short-circuit empty files
+    if idx.line_count() == 0 {
+        return Ok(String::new());
+    }
+
+    // Estimate capacity to reduce reallocations
+    // (heuristic: ~60 bytes per line per range)
+    let mut out = String::with_capacity(ranges.len() * 60);
+
+    // Append each range in order, separating ranges with '\n'
+    for (i, &(s, e)) in ranges.iter().enumerate() {
+        // Validate line bounds
+        if s == 0 || s > e || s > idx.line_count() {
+            anyhow::bail!("invalid range: {s}-{e}");
+        }
+
+        // Clamp end to available lines
+        let end = e.min(idx.line_count());
+
+        // Map to byte span (exclusive end)
+        let (lo, hi) = idx
+            .byte_range_for_lines(s, end, bytes)
+            .ok_or_else(|| anyhow::anyhow!("range out of bounds: {s}-{end}"))?;
+
+        // Push the slice as UTF-8 (content is already valid)
+        out.push_str(&content[lo..hi]);
+
+        // Separate consecutive ranges with a single newline
+        if i + 1 != ranges.len() {
+            out.push('\n');
+        }
+    }
+
+    // Return the composed buffer
+    Ok(out)
+}
+
+pub fn merge_overlapping_ranges(mut ranges: Vec<(usize, usize)>) -> Vec<(usize, usize)> {
+    if ranges.is_empty() {
+        return ranges;
+    }
+
+    // Sort by start position
+    ranges.sort_by_key(|&(start, _)| start);
+
+    let mut merged = vec![ranges[0]];
+
+    for &(start, end) in &ranges[1..] {
+        let last_idx = merged.len() - 1;
+        let (last_start, last_end) = merged[last_idx];
+
+        if start <= last_end + 1 {
+            // Overlapping or adjacent ranges - merge them
+            merged[last_idx] = (last_start, end.max(last_end));
+        } else {
+            // Non-overlapping range
+            merged.push((start, end));
+        }
+    }
+
+    merged
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_merge_overlapping_ranges() {
+        assert_eq!(
+            merge_overlapping_ranges(vec![(1, 3), (2, 5), (7, 9)]),
+            vec![(1, 5), (7, 9)]
+        );
+
+        assert_eq!(
+            merge_overlapping_ranges(vec![(1, 2), (3, 4)]),
+            vec![(1, 4)] // Adjacent ranges should merge
+        );
+
+        assert_eq!(
+            merge_overlapping_ranges(vec![(1, 1), (3, 3), (5, 5)]),
+            vec![(1, 1), (3, 3), (5, 5)]
+        );
+    }
+
+    #[test]
+    fn test_extract_lines() {
+        let content = "line1\nline2\nline3\nline4\nline5";
+
+        let result = extract_lines(content, &[(2, 3)]).unwrap();
+        assert_eq!(result, "line2\nline3");
+
+        let result = extract_lines(content, &[(1, 2), (4, 5)]).unwrap();
+        assert_eq!(result, "line1\nline2\nline4\nline5");
+    }
+}
+```
+
+// File: src/infra/line_index.rs (lines 1-137)
+```rust
+//! Newline index with LF/CRLF-robust line/byte mapping.
+//!
+//! Goals
+//! - Single pass over bytes to record '\n' positions.
+//! - 1-based external line numbers (friendly for UX).
+//! - O(1) line→byte start/end via the index.
+//! - End byte excludes trailing '\r' for CRLF lines.
+//! - Binary search for byte→line mapping.
+//!
+//! Notes
+//! - An empty buffer has 0 lines.
+//! - A non-empty buffer without '\n' has 1 line.
+//! - For ranges, end is exclusive (Rust slicing convention).
+
+use std::cmp;
+
+#[derive(Debug, Clone)]
+pub struct NewlineIndex {
+    /// Byte positions of every '\n' in the buffer.
+    nl_positions: Vec<usize>,
+    /// Total byte length of the buffer.
+    len: usize,
+}
+
+impl NewlineIndex {
+    /// Build an index recording positions of '\n'.
+    pub fn build(bytes: &[u8]) -> Self {
+        let mut nl_positions = Vec::with_capacity(bytes.len() / 48);
+        let mut i = 0usize;
+
+        // Single pass; record every '\n' offset.
+        while let Some(pos) = memchr::memchr(b'\n', &bytes[i..]) {
+            let abs = i + pos;
+            nl_positions.push(abs);
+            i = abs + 1;
+        }
+
+        Self {
+            nl_positions,
+            len: bytes.len(),
+        }
+    }
+
+    /// Total number of logical lines.
+    /// Empty buffer => 0 lines; else (#'\n' + 1).
+    pub fn line_count(&self) -> usize {
+        if self.len == 0 {
+            0
+        } else {
+            self.nl_positions.len() + 1
+        }
+    }
+
+    /// Start byte (inclusive) of a 1-based line.
+    /// Returns None if line is out of range.
+    pub fn start_byte_of_line(&self, line1: usize) -> Option<usize> {
+        let total = self.line_count();
+        if line1 == 0 || line1 > total {
+            return None;
+        }
+        if line1 == 1 {
+            return Some(0);
+        }
+        // For line L>1, start is one past the previous '\n'.
+        self.nl_positions
+            .get(line1 - 2)
+            .

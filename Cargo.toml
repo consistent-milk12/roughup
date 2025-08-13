@@ -1,0 +1,74 @@
+[package]
+name = "roughup"
+version = "0.1.0"
+edition = "2024"
+description = "A super-fast, lightweight CLI for extracting and packaging source code for LLM workflows"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/your-username/roughup"
+keywords = ["cli", "llm", "extraction", "source-code", "symbols"]
+categories = ["command-line-utilities", "development-tools"]
+
+[[bin]]
+name = "rup"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.5.45", features = ["derive", "cargo"] }
+clap_complete = "4.5.57"
+
+ignore = "0.4.23"
+globset = "0.4.16"
+
+rayon = "1.11.0"
+memmap2 = "0.9.7"
+
+config = "0.15.13"
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.142"
+toml = "0.9.5"
+
+anyhow = "1.0.99"
+thiserror = "2.0.14"
+memchr = "2.7"
+
+owo-colors = "4.2.2"
+ptree = "0.5.2"
+indicatif = "0.18.0"
+
+# AST parsing & caching
+tree-sitter = { version = "0.25.8" }
+tree-sitter-rust = { version = "0.24.0" }
+tree-sitter-python = { version = "0.23.6" }
+tree-sitter-javascript = { version = "0.23.1" }
+tree-sitter-typescript = { version = "0.23.2" }
+tree-sitter-go = { version = "0.23.4" }
+tree-sitter-cpp = { version = "0.23.4" }
+moka = { version = "0.12.10", features = ["sync"] }
+
+# Tokenization
+tokenizers = { version = "0.21.4" }
+tiktoken-rs = { version = "0.7.0" }
+
+# Clipboard (optional)
+arboard = { version = "3.6.0" }
+smallvec = "1.15.1"
+
+[build-dependencies]
+cc = "*" # helps some tree-sitter grammar builds on CI
+
+[dev-dependencies]
+tempfile = "3.20.0"
+
+[profile.release]
+opt-level = 3
+lto = "thin"        # faster than “true” (fat LTO)
+codegen-units = 1
+strip = "debuginfo"
+
+
+[profile.dev]
+opt-level = 1          # small runtime win, compile still fast
+debug = true
+overflow-checks = true
+incremental = true
+codegen-units = 16     # default-ish; makes dev builds much faster

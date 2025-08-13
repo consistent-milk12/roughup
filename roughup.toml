@@ -1,0 +1,29 @@
+ignore_patterns = [
+    "target/",
+    "node_modules/",
+    "dist/",
+    "build/",
+    ".git/",
+    "*.pyc",
+    "__pycache__/",
+    ".DS_Store",
+    "Thumbs.db",
+]
+
+[extract]
+annotate = false
+fence = false
+output_file = "extracted_source.txt"
+
+[tree]
+show_hidden = false
+
+[symbols]
+languages = ["rust", "python", "javascript"]
+include_private = false
+output_file = "symbols.jsonl"
+
+[chunk]
+max_tokens = 4000
+model = "gpt-4"
+output_dir = "chunks"
