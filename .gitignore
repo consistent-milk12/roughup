@@ -1,2 +1,4 @@
 .git
 /target
+Cargo.lock
+diff.rs
