@@ -10,10 +10,10 @@ use owo_colors::OwoColorize;
 use rayon::prelude::*;
 use std::path::Path;
 
-use crate::cli::ExtractArgs;
+use crate::cli::{AppContext, ExtractArgs};
 use crate::infra::io::{extract_lines, read_file_smart};
 
-pub fn run(args: ExtractArgs, global_dry_run: bool) -> Result<()> {
+pub fn run(args: ExtractArgs, ctx: &AppContext) -> Result<()> {
     // Parse extraction targets using robust Windows-aware parser
     let targets: Result<Vec<_>> = args
         .targets
@@ -26,14 +26,21 @@ pub fn run(args: ExtractArgs, global_dry_run: bool) -> Result<()> {
         anyhow::bail!("No extraction targets specified");
     }
 
-    // Set up progress bar
-    let progress = ProgressBar::new(targets.len() as u64);
-    progress.set_style(
-        ProgressStyle::default_bar()
-            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} {msg}")
-            .unwrap()
-            .progress_chars("#>-"),
-    );
+    // Set up progress bar (unless quiet mode)
+    let progress = if ctx.quiet {
+        ProgressBar::hidden()
+    } else {
+        let pb = ProgressBar::new(targets.len() as u64);
+        pb.set_style(
+            ProgressStyle::default_bar()
+                .template(
+                    "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} {msg}",
+                )
+                .unwrap()
+                .progress_chars("#>-"),
+        );
+        pb
+    };
 
     // Process in parallel with order preserved in collect
     let pieces: Vec<Result<String>> = targets
@@ -44,8 +51,9 @@ pub fn run(args: ExtractArgs, global_dry_run: bool) -> Result<()> {
                 .with_context(|| format!("Failed to read file: {}", target.file.display()))?;
 
             // Extract merged ranges with LF/CRLF-safe slicing
-            let body = extract_lines(content.as_ref(), &target.ranges)
-                .with_context(|| format!("Failed to extract lines from {}", target.file.display()))?;
+            let body = extract_lines(content.as_ref(), &target.ranges).with_context(|| {
+                format!("Failed to extract lines from {}", target.file.display())
+            })?;
 
             // Optional formatting (annotate/fence/…)
             let formatted = format_extraction(
@@ -78,7 +86,7 @@ pub fn run(args: ExtractArgs, global_dry_run: bool) -> Result<()> {
     }
 
     // Write output
-    let dry_run = args.dry_run || global_dry_run;
+    let dry_run = ctx.dry_run;
     if !dry_run {
         std::fs::write(&args.output, &final_content)
             .with_context(|| format!("Failed to write to {}", args.output.display()))?;
@@ -89,20 +97,22 @@ pub fn run(args: ExtractArgs, global_dry_run: bool) -> Result<()> {
     }
 
     if dry_run {
-        println!("{}", "DRY RUN: Would extract:".yellow());
-        for target in &targets {
-            println!("  {} (lines {:?})", target.file.display(), target.ranges);
+        if !ctx.quiet {
+            println!("{}", "DRY RUN: Would extract:".yellow());
+            for target in &targets {
+                println!("  {} (lines {:?})", target.file.display(), target.ranges);
+            }
+            println!(
+                "{}",
+                format!(
+                    "Would write {} bytes to {}",
+                    final_content.len(),
+                    args.output.display()
+                )
+                .yellow()
+            );
         }
-        println!(
-            "{}",
-            format!(
-                "Would write {} bytes to {}",
-                final_content.len(),
-                args.output.display()
-            )
-            .yellow()
-        );
-    } else {
+    } else if !ctx.quiet {
         println!(
             "{} Extracted {} bytes to {}",
             "✓".green(),
@@ -206,7 +216,10 @@ mod tests {
     #[test]
     fn test_parse_windows_path() {
         let target = ExtractionTarget::parse(r"C:\work\repo\src\lib.rs:3-4,10").unwrap();
-        assert_eq!(target.file, std::path::PathBuf::from(r"C:\work\repo\src\lib.rs"));
+        assert_eq!(
+            target.file,
+            std::path::PathBuf::from(r"C:\work\repo\src\lib.rs")
+        );
         assert_eq!(target.ranges, vec![(3, 4), (10, 10)]);
     }
 

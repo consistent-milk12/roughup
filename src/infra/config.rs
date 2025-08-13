@@ -1,4 +1,4 @@
-use crate::cli::InitArgs;
+use crate::cli::{AppContext, InitArgs};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -122,7 +122,7 @@ pub fn load_config() -> Result<Config> {
     Ok(parsed)
 }
 
-pub fn init(args: InitArgs) -> Result<()> {
+pub fn init(args: InitArgs, ctx: &AppContext) -> Result<()> {
     let config_path = args.path.join("roughup.toml");
 
     if config_path.exists() && !args.force {
@@ -138,6 +138,8 @@ pub fn init(args: InitArgs) -> Result<()> {
 
     std::fs::write(&config_path, toml_string).context("Failed to write config file")?;
 
-    println!("Created config file at {}", config_path.display());
+    if !ctx.quiet {
+        println!("Created config file at {}", config_path.display());
+    }
     Ok(())
 }

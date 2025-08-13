@@ -62,12 +62,12 @@ pub mod infra {
 
     /// Utility functions and helpers for common operations
     pub mod utils;
-    pub use utils::*;
+    // Keep utils private - not part of the public API
 }
 
 // Strategic re-exports for clean CLI interface
-pub use cli::{Cli, Commands};
-pub use core::{extract, symbols_run, tree_run, chunk_run};
+pub use cli::{AppContext, Cli, Commands};
+pub use core::{chunk_run, extract_run, symbols_run, tree_run};
 pub use infra::{Config, FileWalker, load_config};
 pub use parsers::{PythonExtractor, RustExtractor, SymbolExtractor};
 

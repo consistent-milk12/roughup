@@ -14,13 +14,13 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::cli::TreeArgs;
+use crate::cli::{AppContext, TreeArgs};
 use crate::infra::config::load_config;
 use crate::infra::walk::FileWalker;
 
 const MMAP_THRESHOLD_BYTES: u64 = 1_048_576; // 1 MiB
 
-pub fn run(args: TreeArgs) -> Result<()> {
+pub fn run(args: TreeArgs, ctx: &AppContext) -> Result<()> {
     let config = load_config().unwrap_or_default();
 
     // Combine config ignore patterns with CLI args
@@ -29,19 +29,23 @@ pub fn run(args: TreeArgs) -> Result<()> {
 
     let walker = FileWalker::new(&ignore_patterns)?;
 
-    if args.dry_run {
-        println!("{}", "DRY RUN: Would scan:".yellow());
-        println!("  Root: {}", args.path.display());
-        println!("  Max depth: {:?}", args.depth);
-        println!("  Ignore patterns: {:?}", ignore_patterns);
+    if ctx.dry_run {
+        if !ctx.quiet {
+            println!("{}", "DRY RUN: Would scan:".yellow());
+            println!("  Root: {}", args.path.display());
+            println!("  Max depth: {:?}", args.depth);
+            println!("  Ignore patterns: {:?}", ignore_patterns);
+        }
         return Ok(());
     }
 
     // Build file tree with per-file line counts
     let tree = build_tree_with_counts(&args.path, &walker, args.depth)?;
 
-    // Print tree
-    print_tree(&tree)?;
+    // Print tree (unless quiet)
+    if !ctx.quiet {
+        print_tree(&tree)?;
+    }
 
     Ok(())
 }

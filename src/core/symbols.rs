@@ -17,7 +17,7 @@ use std::{
 use crate::parsers::{PythonExtractor, RustExtractor};
 
 /// Public CLI entry point expected by the command layer
-pub fn run(args: crate::cli::SymbolsArgs) -> Result<()> {
+pub fn run(args: crate::cli::SymbolsArgs, ctx: &crate::cli::AppContext) -> Result<()> {
     // Load configuration with graceful fallback
     let config = crate::infra::config::load_config().unwrap_or_default();
 
@@ -32,12 +32,16 @@ pub fn run(args: crate::cli::SymbolsArgs) -> Result<()> {
 
     // Early exit if nothing to do
     if files.is_empty() {
-        println!("No files found for languages: {:?}", langs.as_vec());
+        if !ctx.quiet {
+            println!("No files found for languages: {:?}", langs.as_vec());
+        }
         return Ok(());
     }
 
     // Inform the user how many files will be processed
-    println!("Extracting symbols from {} files...", files.len());
+    if !ctx.quiet {
+        println!("Extracting symbols from {} files...", files.len());
+    }
 
     // Extract symbols in parallel and aggregate results
     let mut all: Vec<Symbol> = SymbolsExecutor::extract_parallel(&files, &args)?;
@@ -54,11 +58,13 @@ pub fn run(args: crate::cli::SymbolsArgs) -> Result<()> {
     JsonlWriter::write(&all, &args.output)?;
 
     // Print a success message with the output path
-    println!(
-        "✓ Extracted {} symbols to {}",
-        all.len(),
-        args.output.display()
-    );
+    if !ctx.quiet {
+        println!(
+            "✓ Extracted {} symbols to {}",
+            all.len(),
+            args.output.display()
+        );
+    }
 
     // Done
     Ok(())

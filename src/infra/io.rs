@@ -49,10 +49,7 @@ pub fn read_file_smart<P: AsRef<Path>>(path: P) -> Result<FileContent> {
 
 /// Extract inclusive 1-based line ranges as a single String.
 /// Ranges must be validated and merged by the caller.
-pub fn extract_lines(
-    content: &str,
-    ranges: &[(usize, usize)],
-) -> Result<String> {
+pub fn extract_lines(content: &str, ranges: &[(usize, usize)]) -> Result<String> {
     // Work in bytes; validate once then slice cheaply
     let bytes = content.as_bytes();
 

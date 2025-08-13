@@ -1,6 +1,14 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
+/// Shared application context for global flags
+#[derive(Clone, Debug)]
+pub struct AppContext {
+    pub quiet: bool,    // global --quiet
+    pub no_color: bool, // global --no-color
+    pub dry_run: bool,  // global --dry-run
+}
+
 #[derive(Parser)]
 #[command(name = "roughup")]
 #[command(
@@ -65,10 +73,6 @@ pub struct ExtractArgs {
     /// Copy result to clipboard
     #[arg(long)]
     pub clipboard: bool,
-
-    /// Show what would be done without executing
-    #[arg(long)]
-    pub dry_run: bool,
 }
 
 #[derive(Parser)]
@@ -84,10 +88,6 @@ pub struct TreeArgs {
     /// Maximum depth to traverse
     #[arg(short, long)]
     pub depth: Option<usize>,
-
-    /// Show what would be done without executing
-    #[arg(long)]
-    pub dry_run: bool,
 }
 
 #[derive(Debug, Parser)]
@@ -126,8 +126,9 @@ pub struct ChunkArgs {
     #[arg(short, long, default_value = "chunks")]
     pub output_dir: PathBuf,
 
-    /// Prefer symbol boundaries when chunking (default: true)
+    /// Prefer symbol boundaries when chunking
     #[arg(long, default_value = "true")]
+    #[arg(action = clap::ArgAction::Set)]
     pub by_symbols: bool,
 
     /// Token overlap between chunks

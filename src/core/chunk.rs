@@ -335,7 +335,7 @@ fn extract_symbol_text(content: &str, sym: &Symbol) -> Result<String> {
 }
 
 /// CLI run function - integrates GptChunker with command-line interface
-pub fn run(args: crate::cli::ChunkArgs) -> anyhow::Result<()> {
+pub fn run(args: crate::cli::ChunkArgs, ctx: &crate::cli::AppContext) -> anyhow::Result<()> {
     // Initialize the GPT chunker with specified model
     let chunker = GptChunker::new(&args.model)
         .with_context(|| format!("Failed to initialize chunker for model '{}'", args.model))?;
@@ -355,14 +355,18 @@ pub fn run(args: crate::cli::ChunkArgs) -> anyhow::Result<()> {
     // Determine chunking strategy - try symbols first, fallback to tokens
     let chunks = match extract_symbols_for_chunking(&args.input) {
         Ok(symbols) if !symbols.is_empty() => {
-            println!(
-                "Found {} symbols, chunking by symbol boundaries",
-                symbols.len()
-            );
+            if !ctx.quiet {
+                println!(
+                    "Found {} symbols, chunking by symbol boundaries",
+                    symbols.len()
+                );
+            }
             chunk_by_symbols(content_str, &symbols, args.max_tokens, &chunker)?
         }
         _ => {
-            println!("No symbols found, using token-based chunking");
+            if !ctx.quiet {
+                println!("No symbols found, using token-based chunking");
+            }
             chunk_by_tokens(&chunker, content_str, args.max_tokens)?
         }
     };
@@ -371,13 +375,15 @@ pub fn run(args: crate::cli::ChunkArgs) -> anyhow::Result<()> {
     write_chunks_and_manifest(&chunks, &args.output_dir)?;
 
     // Print success summary
-    println!(
-        "✓ Created {} chunks in {}",
-        chunks.len(),
-        args.output_dir.display()
-    );
-    let total_tokens: usize = chunks.iter().map(|c| c.token_count).sum();
-    println!("  Total tokens: {}", total_tokens);
+    if !ctx.quiet {
+        println!(
+            "✓ Created {} chunks in {}",
+            chunks.len(),
+            args.output_dir.display()
+        );
+        let total_tokens: usize = chunks.iter().map(|c| c.token_count).sum();
+        println!("  Total tokens: {}", total_tokens);
+    }
 
     Ok(())
 }

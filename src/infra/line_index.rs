@@ -62,9 +62,7 @@ impl NewlineIndex {
             return Some(0);
         }
         // For line L>1, start is one past the previous '\n'.
-        self.nl_positions
-            .get(line1 - 2)
-            .map(|&prev_nl| prev_nl + 1)
+        self.nl_positions.get(line1 - 2).map(|&prev_nl| prev_nl + 1)
     }
 
     /// End byte (exclusive) of a 1-based line.
@@ -107,10 +105,7 @@ impl NewlineIndex {
         }
 
         let s = self.start_byte_of_line(start_line1)?;
-        let e = self.end_byte_of_line(
-            cmp::min(end_line1, total),
-            bytes,
-        )?;
+        let e = self.end_byte_of_line(cmp::min(end_line1, total), bytes)?;
 
         if s <= e && e <= self.len {
             Some((s, e))

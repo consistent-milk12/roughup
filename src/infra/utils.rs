@@ -501,10 +501,7 @@ mod tests {
 
             // Handle '/** ... */'
             if t.starts_with("/**") {
-                let body = t
-                    .trim_start_matches("/**")
-                    .trim_end_matches("*/")
-                    .trim();
+                let body = t.trim_start_matches("/**").trim_end_matches("*/").trim();
 
                 let norm = body
                     .lines()

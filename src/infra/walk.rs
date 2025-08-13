@@ -188,16 +188,22 @@ mod tests {
         let files = walker.walk_files(root);
 
         // Filter out .git directory files and .gitignore itself for the test assertion
-        let user_files: Vec<_> = files.iter()
+        let user_files: Vec<_> = files
+            .iter()
             .filter(|f| {
                 let path_str = f.to_string_lossy();
-                !path_str.contains("/.git/") && 
-                f.file_name().and_then(|n| n.to_str()) != Some(".gitignore")
+                !path_str.contains("/.git/")
+                    && f.file_name().and_then(|n| n.to_str()) != Some(".gitignore")
             })
             .collect();
 
         // Only keep.txt should remain (README.md should be ignored by .gitignore)
-        assert_eq!(user_files.len(), 1, "Expected 1 user file, found: {:?}", files);
+        assert_eq!(
+            user_files.len(),
+            1,
+            "Expected 1 user file, found: {:?}",
+            files
+        );
         assert_eq!(user_files[0].file_name().unwrap(), "keep.txt");
 
         // Done
@@ -223,7 +229,6 @@ mod tests {
 
         // Walk files
         let files = walker.walk_files(root);
-
 
         // Only src/lib.rs should remain (others pruned/filtered)
         assert_eq!(files.len(), 1, "unexpected files: {files:?}");
