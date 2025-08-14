@@ -75,6 +75,40 @@ pub fn generate_patches(spec: &EditSpec, config: &PatchConfig) -> Result<PatchSe
     let mut ops_by_file: BTreeMap<String, Vec<&EditOperation>> = BTreeMap::new();
     for file_block in &spec.file_blocks {
         let path_str = file_block.path.to_string_lossy().to_string();
+
+        // Re-validate CID at generation time to avoid TOCTOU
+        if config.validate_guards {
+            let current_content = std::fs::read_to_string(&file_block.path).with_context(|| {
+                format!("Failed to re-read file for CID validation: {}", path_str)
+            })?;
+            let current_lines: Vec<&str> = current_content.lines().collect();
+
+            for op in &file_block.operations {
+                if let EditOperation::Replace {
+                    start_line,
+                    end_line,
+                    guard_cid: Some(cid),
+                    ..
+                } = op
+                {
+                    let actual_lines = &current_lines[(*start_line - 1)..*end_line];
+                    let actual_content = actual_lines.join("\n");
+                    let actual_cid = generate_cid(&actual_content);
+
+                    if cid != &actual_cid {
+                        anyhow::bail!(
+                            "Guard CID mismatch during patch generation for {}:{}-{}: expected {}, got {}",
+                            path_str,
+                            start_line,
+                            end_line,
+                            cid,
+                            actual_cid
+                        );
+                    }
+                }
+            }
+        }
+
         ops_by_file
             .entry(path_str)
             .or_default()
@@ -189,9 +223,12 @@ fn operation_to_hunk(
             let new_lines: Vec<&str> = new_content.lines().collect();
             let new_count = new_lines.len();
 
-            // Build hunk with context
+            // Build hunk with context - fix off-by-one near EOF
             let context_start = old_start.saturating_sub(config.context_lines).max(1);
-            let context_end = (old_end + config.context_lines).min(file_lines.len());
+            let context_end = old_end
+                .saturating_add(config.context_lines)
+                .min(file_lines.len())
+                .max(old_end);
 
             let mut hunk_lines = Vec::new();
 
@@ -380,16 +417,92 @@ fn merge_adjacent_hunks(hunks: Vec<Hunk>, context_lines: usize) -> Vec<Hunk> {
     merged
 }
 
-/// Merge two adjacent hunks
+/// Merge two adjacent hunks with overlap-aware line handling
 fn merge_two_hunks(mut first: Hunk, second: Hunk) -> Hunk {
-    // Extend first hunk to include second
-    first.old_count = (second.old_start + second.old_count) - first.old_start;
-    first.new_count = (second.new_start + second.new_count) - first.new_start;
+    // Check if contexts overlap or touch
+    let first_end = first.old_start + first.old_count;
+    if first_end >= second.old_start.saturating_sub(1) {
+        // Merge hunks
+        let new_old_end =
+            (first.old_start + first.old_count).max(second.old_start + second.old_count);
+        let new_new_end =
+            (first.new_start + first.new_count).max(second.new_start + second.new_count);
 
-    // Merge lines (simplified - in production you'd handle overlapping context)
-    first.lines.extend(second.lines);
+        first.old_count = new_old_end - first.old_start;
+        first.new_count = new_new_end - first.new_start;
 
-    first
+        // Merge lines by deduplicating overlapping context
+        first.lines = merge_hunk_lines(&first.lines, &second.lines);
+        first
+    } else {
+        // Too far apart - concatenate without overlap
+        first.old_count = (second.old_start + second.old_count) - first.old_start;
+        first.new_count = (second.new_start + second.new_count) - first.new_start;
+        first.lines.extend(second.lines);
+        first
+    }
+}
+
+/// Merge hunk lines while removing duplicate context
+fn merge_hunk_lines(first_lines: &[HunkLine], second_lines: &[HunkLine]) -> Vec<HunkLine> {
+    let mut result = first_lines.to_vec();
+
+    // Find trailing context lines in first hunk
+    let mut first_context_end = first_lines.len();
+    while first_context_end > 0 {
+        if let HunkLine::Context(_) = &first_lines[first_context_end - 1] {
+            first_context_end -= 1;
+        } else {
+            break;
+        }
+    }
+
+    // Find leading context lines in second hunk
+    let mut second_context_start = 0;
+    while second_context_start < second_lines.len() {
+        if let HunkLine::Context(_) = &second_lines[second_context_start] {
+            second_context_start += 1;
+        } else {
+            break;
+        }
+    }
+
+    // Remove potential duplicate context (simple string comparison)
+    let overlap_size = (first_lines.len() - first_context_end).min(second_context_start);
+    if overlap_size > 0 {
+        // Check if the contexts actually overlap
+        let mut overlaps = true;
+        for i in 0..overlap_size {
+            let first_idx = first_context_end + i;
+            let second_idx = i;
+            if first_idx < first_lines.len() && second_idx < second_lines.len() {
+                match (&first_lines[first_idx], &second_lines[second_idx]) {
+                    (HunkLine::Context(a), HunkLine::Context(b)) => {
+                        if a != b {
+                            overlaps = false;
+                            break;
+                        }
+                    }
+                    _ => {
+                        overlaps = false;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if overlaps {
+            // Skip the overlapping context in second hunk
+            result.extend_from_slice(&second_lines[overlap_size..]);
+        } else {
+            // No overlap, just concatenate
+            result.extend_from_slice(second_lines);
+        }
+    } else {
+        result.extend_from_slice(second_lines);
+    }
+
+    result
 }
 
 /// Render patch set as unified diff string

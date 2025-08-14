@@ -30,6 +30,7 @@ toml = "0.9.5"
 anyhow = "1.0.99"
 thiserror = "2.0.14"
 memchr = "2.7"
+regex = "1.11.1"
 
 owo-colors = "4.2.2"
 ptree = "0.5.2"

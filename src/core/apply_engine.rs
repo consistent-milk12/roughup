@@ -79,11 +79,44 @@ impl ApplyEngine for InternalEngine {
         let patch_set = generate_patches(spec, &config)?;
         let patch_content = crate::core::patch::render_unified_diff(&patch_set);
 
-        let conflicts: Vec<String> = result
-            .conflicts
-            .iter()
-            .map(|c| format!("{:?}", c)) // TODO: Better formatting
-            .collect();
+        let conflicts = crate::core::git::render_conflict_summary(
+            &result
+                .conflicts
+                .iter()
+                .map(|c| match c {
+                    crate::core::edit::EditConflict::FileNotFound(path) => {
+                        crate::core::git::GitConflict::Other(format!(
+                            "file not found: {}",
+                            path.display()
+                        ))
+                    }
+                    crate::core::edit::EditConflict::ContentMismatch {
+                        file,
+                        expected_cid: _,
+                        actual_cid: _,
+                    } => crate::core::git::GitConflict::PreimageMismatch {
+                        path: file.clone(),
+                        hunk: (0, 0),
+                        hint: "CID mismatch - content changed",
+                    },
+                    crate::core::edit::EditConflict::SpanOutOfRange { file, span, .. } => {
+                        crate::core::git::GitConflict::Other(format!(
+                            "span out of range: {}:{}-{}",
+                            file.display(),
+                            span.0,
+                            span.1
+                        ))
+                    }
+                    crate::core::edit::EditConflict::OldContentMismatch { file, span } => {
+                        crate::core::git::GitConflict::PreimageMismatch {
+                            path: file.clone(),
+                            hunk: (span.0 as u32, span.1 as u32),
+                            hint: "OLD content mismatch",
+                        }
+                    }
+                })
+                .collect::<Vec<_>>(),
+        );
 
         let summary = format!(
             "Preview: {} file(s), {} operation(s), {} conflict(s)",
@@ -110,11 +143,44 @@ impl ApplyEngine for InternalEngine {
 
         let result = engine.apply(spec)?;
 
-        let conflicts: Vec<String> = result
-            .conflicts
-            .iter()
-            .map(|c| format!("{:?}", c)) // TODO: Better formatting
-            .collect();
+        let conflicts = crate::core::git::render_conflict_summary(
+            &result
+                .conflicts
+                .iter()
+                .map(|c| match c {
+                    crate::core::edit::EditConflict::FileNotFound(path) => {
+                        crate::core::git::GitConflict::Other(format!(
+                            "file not found: {}",
+                            path.display()
+                        ))
+                    }
+                    crate::core::edit::EditConflict::ContentMismatch {
+                        file,
+                        expected_cid: _,
+                        actual_cid: _,
+                    } => crate::core::git::GitConflict::PreimageMismatch {
+                        path: file.clone(),
+                        hunk: (0, 0),
+                        hint: "CID mismatch - content changed",
+                    },
+                    crate::core::edit::EditConflict::SpanOutOfRange { file, span, .. } => {
+                        crate::core::git::GitConflict::Other(format!(
+                            "span out of range: {}:{}-{}",
+                            file.display(),
+                            span.0,
+                            span.1
+                        ))
+                    }
+                    crate::core::edit::EditConflict::OldContentMismatch { file, span } => {
+                        crate::core::git::GitConflict::PreimageMismatch {
+                            path: file.clone(),
+                            hunk: (span.0 as u32, span.1 as u32),
+                            hint: "OLD content mismatch",
+                        }
+                    }
+                })
+                .collect::<Vec<_>>(),
+        );
 
         Ok(ApplyReport {
             applied_files: result.applied_files,
@@ -148,11 +214,7 @@ impl ApplyEngine for GitEngineWrapper {
 
         let outcome = self.git_engine.check(&patch_set)?;
 
-        let conflicts: Vec<String> = outcome
-            .conflicts
-            .iter()
-            .map(|c| format!("{:?}", c)) // TODO: Use render_conflict_summary
-            .collect();
+        let conflicts = crate::core::git::render_conflict_summary(&outcome.conflicts);
 
         let summary = format!(
             "Git Preview: {} file(s), {} conflict(s)",
@@ -177,11 +239,7 @@ impl ApplyEngine for GitEngineWrapper {
 
         let outcome = self.git_engine.apply(&patch_set)?;
 
-        let conflicts: Vec<String> = outcome
-            .conflicts
-            .iter()
-            .map(|c| format!("{:?}", c)) // TODO: Use render_conflict_summary
-            .collect();
+        let conflicts = crate::core::git::render_conflict_summary(&outcome.conflicts);
 
         Ok(ApplyReport {
             applied_files: outcome.applied_files,
@@ -194,16 +252,24 @@ impl ApplyEngine for GitEngineWrapper {
 
 /// Hybrid engine with automatic fallback
 pub struct HybridEngine {
-    internal: InternalEngine,
-    git: GitEngineWrapper,
+    internal: InternalEngine,      // always available
+    git: Option<GitEngineWrapper>, // lazy, only if repo exists
 }
 
 impl HybridEngine {
-    pub fn new(backup_enabled: bool, force_mode: bool, git_options: GitOptions) -> Result<Self> {
+    pub fn new(
+        backup_enabled: bool,
+        force_mode: bool,
+        git_options: GitOptions,
+        repo_present: bool,
+    ) -> Result<Self> {
         let context_lines = git_options.context_lines as usize;
         let internal = InternalEngine::new(backup_enabled, force_mode, context_lines);
-        let git = GitEngineWrapper::new(git_options)?;
-
+        let git = if repo_present {
+            Some(GitEngineWrapper::new(git_options)?)
+        } else {
+            None
+        };
         Ok(Self { internal, git })
     }
 }
@@ -214,17 +280,25 @@ impl ApplyEngine for HybridEngine {
         match self.internal.check(spec) {
             Ok(preview) if preview.conflicts.is_empty() => Ok(preview),
             Ok(mut preview) => {
-                // Internal has conflicts, also show git preview
-                let git_preview = self.git.check(spec)?;
-                preview.summary.push_str(&format!(
-                    " | Git: {} conflict(s)",
-                    git_preview.conflicts.len()
-                ));
+                // Internal has conflicts, also show git preview if available
+                if let Some(git) = &self.git {
+                    let git_preview = git.check(spec)?;
+                    preview.summary.push_str(&format!(
+                        " | Git: {} conflict(s)",
+                        git_preview.conflicts.len()
+                    ));
+                }
                 Ok(preview)
             }
             Err(_) => {
-                // Internal failed, try git
-                self.git.check(spec)
+                // Internal failed, try git if available
+                if let Some(git) = &self.git {
+                    git.check(spec)
+                } else {
+                    Err(anyhow::anyhow!(
+                        "Internal engine failed and git not available"
+                    ))
+                }
             }
         }
     }
@@ -234,23 +308,43 @@ impl ApplyEngine for HybridEngine {
         match self.internal.apply(spec) {
             Ok(report) if report.conflicts.is_empty() => Ok(report),
             Ok(internal_report) => {
-                // Internal has conflicts, retry with git
-                println!("⚠️  Internal engine conflicts detected, retrying with git --3way");
-                match self.git.apply(spec) {
-                    Ok(mut git_report) => {
-                        git_report.engine_used = Engine::Auto;
-                        Ok(git_report)
+                // Internal has conflicts; attempt git if available
+                if let Some(git) = &self.git {
+                    match git.apply(spec) {
+                        Ok(mut git_report) => {
+                            git_report.engine_used = Engine::Auto;
+                            Ok(git_report)
+                        }
+                        Err(err) => {
+                            // Return a combined conflict report via error so CLI can emit exit 2
+                            let combined = crate::core::git::CombinedConflictError::new(
+                                internal_report.conflicts.clone(),
+                                format!("git_apply_failed: {err}"),
+                            );
+                            Err(combined.into())
+                        }
                     }
-                    Err(_) => {
-                        // Git also failed, return internal result
-                        Ok(internal_report)
-                    }
+                } else {
+                    // No git available; escalate as conflicts so CLI returns code 2
+                    let combined = crate::core::git::CombinedConflictError::new(
+                        internal_report.conflicts.clone(),
+                        "git_unavailable".into(),
+                    );
+                    Err(combined.into())
                 }
             }
             Err(e) => {
-                // Internal failed completely, try git
-                println!("⚠️  Internal engine failed, retrying with git");
-                self.git.apply(spec).or(Err(e))
+                // Internal failed; try git if available, otherwise propagate
+                if let Some(git) = &self.git {
+                    git.apply(spec)
+                        .map(|mut r| {
+                            r.engine_used = Engine::Auto;
+                            r
+                        })
+                        .or(Err(e))
+                } else {
+                    Err(e)
+                }
             }
         }
     }
@@ -289,11 +383,18 @@ pub fn create_engine(
             context_lines,
         ))),
         EngineChoice::Git => Ok(Box::new(GitEngineWrapper::new(git_options)?)),
-        EngineChoice::Auto => Ok(Box::new(HybridEngine::new(
-            backup_enabled,
-            force_mode,
-            git_options,
-        )?)),
+        EngineChoice::Auto => {
+            // Detect repo once here; do NOT fail auto if absent
+            let repo_present = crate::core::git::detect_repo(&git_options.repo_root).is_ok();
+            let mut auto_git_options = git_options;
+            auto_git_options.allow_outside_repo = true; // Allow auto to work outside repos
+            Ok(Box::new(HybridEngine::new(
+                backup_enabled,
+                force_mode,
+                auto_git_options,
+                repo_present,
+            )?))
+        }
     }
 }
 

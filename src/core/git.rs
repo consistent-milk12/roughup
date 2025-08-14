@@ -3,11 +3,120 @@
 //! Implements git apply with 3-way merge, stderr parsing, and user-friendly
 //! error mapping according to engineering review specifications.
 
-use anyhow::{Context, Result};
-use std::path::PathBuf;
+use anyhow::{Context, Result, bail};
+use regex::Regex;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use crate::core::patch::PatchSet;
+
+/// Lightweight repo metadata for boundary checks and UX
+#[derive(Debug, Clone)]
+pub struct RepoMeta {
+    pub top_level: PathBuf,
+    pub is_worktree: bool,
+}
+
+/// Combined conflict error for auto engine fallback scenarios
+#[derive(Debug, Clone)]
+pub struct CombinedConflictError {
+    pub internal_conflicts: Vec<String>,
+    pub git_failure_reason: String,
+}
+
+impl CombinedConflictError {
+    pub fn new(internal_conflicts: Vec<String>, git_reason: String) -> Self {
+        Self {
+            internal_conflicts,
+            git_failure_reason: git_reason,
+        }
+    }
+}
+
+impl std::fmt::Display for CombinedConflictError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "conflicts: {}; git: {}",
+            self.internal_conflicts.len(),
+            self.git_failure_reason
+        )
+    }
+}
+
+impl std::error::Error for CombinedConflictError {}
+
+/// Detect if `repo_root` is inside a Git repository (dir or worktree).
+/// Returns the repo top-level directory and whether it is a worktree.
+pub fn detect_repo(repo_root: &Path) -> Result<RepoMeta> {
+    // Fast path: `.git` directory or file (worktree pointer)
+    let dot_git = repo_root.join(".git");
+    if dot_git.exists() {
+        let is_worktree = dot_git.is_file();
+        // If it's a file, resolve "gitdir: <path>" format
+        if is_worktree {
+            let s = fs::read_to_string(&dot_git).context("Failed to read .git file")?;
+            if let Some(_gitdir) = s.strip_prefix("gitdir: ").map(|v| v.trim()) {
+                let top = resolve_top_level(repo_root).unwrap_or_else(|_| repo_root.to_path_buf());
+                return Ok(RepoMeta {
+                    top_level: top,
+                    is_worktree: true,
+                });
+            }
+        }
+        let top = resolve_top_level(repo_root).unwrap_or_else(|_| repo_root.to_path_buf());
+        return Ok(RepoMeta {
+            top_level: top,
+            is_worktree,
+        });
+    }
+    // Fallback: `git rev-parse`
+    let output = std::process::Command::new("git")
+        .args(["rev-parse", "--is-inside-work-tree"])
+        .current_dir(repo_root)
+        .output()
+        .context("Failed to run git rev-parse")?;
+    if !output.status.success() || String::from_utf8_lossy(&output.stdout).trim() != "true" {
+        bail!("Not a git repository: {}", repo_root.display());
+    }
+    let top_level = resolve_top_level(repo_root)?;
+    Ok(RepoMeta {
+        top_level,
+        is_worktree: false,
+    })
+}
+
+fn resolve_top_level(cwd: &Path) -> Result<PathBuf> {
+    let out = std::process::Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(cwd)
+        .output()
+        .context("Failed to run git rev-parse --show-toplevel")?;
+    if !out.status.success() {
+        bail!("Unable to resolve repository toplevel");
+    }
+    Ok(PathBuf::from(String::from_utf8_lossy(&out.stdout).trim()))
+}
+
+/// Ensure `target` stays within `meta.top_level`.
+pub fn ensure_within_repo(meta: &RepoMeta, target: &Path) -> Result<()> {
+    let abs = if target.is_absolute() {
+        target.to_path_buf()
+    } else {
+        meta.top_level.join(target)
+    }
+    .canonicalize()
+    .context("canonicalize failed")?;
+    let top = meta
+        .top_level
+        .canonicalize()
+        .context("canonicalize toplevel failed")?;
+    if !abs.starts_with(&top) {
+        bail!("Path escapes repository boundary: {}", target.display());
+    }
+    Ok(())
+}
 
 /// Git apply modes
 #[derive(Debug, Clone)]
@@ -118,6 +227,15 @@ impl GitEngine {
 
     /// Apply patch set to repository
     pub fn apply(&self, patch_set: &PatchSet) -> Result<GitOutcome> {
+        // Enforce repository boundary if required
+        if !self.options.allow_outside_repo {
+            let meta = detect_repo(&self.options.repo_root)?;
+            for file_patch in &patch_set.file_patches {
+                let path = Path::new(&file_patch.path);
+                ensure_within_repo(&meta, path)?;
+            }
+        }
+
         let patch_content = crate::core::patch::render_unified_diff(patch_set);
         self.run_git_apply(&patch_content, false)
     }
@@ -263,6 +381,18 @@ fn parse_git_stderr(stderr: &str) -> Vec<GitConflict> {
                 path: extract_path_from_error(line).unwrap_or_else(|| PathBuf::from("unknown")),
                 hint: "Edits must target tracked files within the repo root.",
             });
+        } else if line.contains("Binary files") && line.contains("differ") {
+            conflicts.push(GitConflict::BinaryOrMode {
+                path: extract_path_from_error(line).unwrap_or_else(|| PathBuf::from("unknown")),
+                hint: "Binary file conflict. Manual resolution required.",
+            });
+        } else if line.contains("submodule merge conflict") {
+            conflicts.push(GitConflict::Other(format!("submodule: {}", line)));
+        } else if line.contains("pathspec") && line.contains("did not match any files") {
+            conflicts.push(GitConflict::PathOutsideRepo {
+                path: extract_path_from_error(line).unwrap_or_else(|| PathBuf::from("unknown")),
+                hint: "File not tracked or outside sparse-checkout. Check visibility rules.",
+            });
         } else if line.contains("error:") || line.contains("fatal:") {
             conflicts.push(GitConflict::Other(line.to_string()));
         }
@@ -271,10 +401,31 @@ fn parse_git_stderr(stderr: &str) -> Vec<GitConflict> {
     conflicts
 }
 
-/// Extract file path from git error message
+/// Extract file path from git error message using robust regex patterns
 fn extract_path_from_error(error_line: &str) -> Option<PathBuf> {
-    // Simple heuristic: look for file-like strings
-    // This is a simplified implementation - production would need more robust parsing
+    // Common git error patterns:
+    // "error: patch failed: path/to/file:12"
+    // "CONFLICT (content): Merge conflict in path/to/file"
+    // "path/to/file: needs merge"
+    // "Binary files path/to/file and path/to/file differ"
+    static PATTERNS: &[&str] = &[
+        r"patch failed:\s+(.+?):\d+",
+        r"Merge conflict in\s+(.+)",
+        r"^(.+?): needs merge",
+        r"Binary files\s+(.+?)\s+and\s+.+\s+differ",
+        r"error:\s+(.+?):\s+patch does not apply",
+    ];
+
+    for pat in PATTERNS {
+        if let Ok(re) = Regex::new(pat)
+            && let Some(cap) = re.captures(error_line)
+        {
+            let path_str = cap[1].trim();
+            return Some(PathBuf::from(path_str));
+        }
+    }
+
+    // Fallback to original heuristic
     error_line
         .split_whitespace()
         .find(|word| word.contains(".rs") || word.contains(".py") || word.contains("/"))
@@ -314,8 +465,35 @@ fn find_conflict_markers(files: &[PathBuf]) -> Result<Vec<PathBuf>> {
     Ok(files_with_markers)
 }
 
-/// Render user-friendly conflict summary
-pub fn render_conflict_summary(conflicts: &[GitConflict]) -> String {
+/// Render conflicts in a predictable, script-friendly way
+pub fn render_conflict_summary(conflicts: &[GitConflict]) -> Vec<String> {
+    conflicts
+        .iter()
+        .map(|c| match c {
+            GitConflict::PreimageMismatch { path, hunk, .. } => {
+                format!("{}:{}:{} preimage_mismatch", path.display(), hunk.0, hunk.1)
+            }
+            GitConflict::IndexRequired { path, .. } => {
+                format!("{}:0:0 index_required", path.display())
+            }
+            GitConflict::WhitespaceError { path, .. } => {
+                format!("{}:0:0 whitespace_error", path.display())
+            }
+            GitConflict::PathOutsideRepo { path, .. } => {
+                format!("{}:0:0 outside_repo", path.display())
+            }
+            GitConflict::BinaryOrMode { path, .. } => {
+                format!("{}:0:0 binary_or_mode", path.display())
+            }
+            GitConflict::Other(msg) => {
+                format!("unknown:0:0 {}", msg.replace(':', ";"))
+            }
+        })
+        .collect()
+}
+
+/// Render user-friendly conflict summary for human consumption
+pub fn render_conflict_summary_human(conflicts: &[GitConflict]) -> String {
     if conflicts.is_empty() {
         return String::new();
     }
@@ -424,7 +602,7 @@ error: some/path/file.py: whitespace error
             },
         ];
 
-        let summary = render_conflict_summary(&conflicts);
+        let summary = render_conflict_summary_human(&conflicts);
         assert!(summary.contains("Conflicts (2)"));
         assert!(summary.contains("src/main.rs"));
         assert!(summary.contains("src/lib.rs"));

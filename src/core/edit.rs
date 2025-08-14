@@ -131,6 +131,34 @@ pub enum ApplyCliError {
     Internal(String),
 }
 
+/// Typed error for apply operations with structured conflict details
+#[derive(Debug)]
+pub enum ApplyErr {
+    InvalidSpec(String),
+    RepoIssue(String),
+    Conflicts { details: Vec<String> },
+    Internal(anyhow::Error),
+}
+
+impl std::fmt::Display for ApplyErr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ApplyErr::InvalidSpec(msg) => write!(f, "Invalid specification: {}", msg),
+            ApplyErr::RepoIssue(msg) => write!(f, "Repository issue: {}", msg),
+            ApplyErr::Conflicts { details } => {
+                write!(f, "Conflicts detected ({})", details.len())?;
+                for detail in details {
+                    write!(f, "\n  • {}", detail)?;
+                }
+                Ok(())
+            }
+            ApplyErr::Internal(e) => write!(f, "Internal error: {:#}", e),
+        }
+    }
+}
+
+impl std::error::Error for ApplyErr {}
+
 /// Explicit run-mode computed from flags
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum RunMode {
@@ -146,6 +174,16 @@ pub fn exit_code_for(e: &ApplyCliError) -> i32 {
         ApplyCliError::Repo(_) => 4,
         ApplyCliError::Conflicts(_) => 2,
         ApplyCliError::Internal(_) => 5,
+    }
+}
+
+/// Exit code mapping for typed ApplyErr
+pub fn exit_code_for_typed(e: &ApplyErr) -> i32 {
+    match e {
+        ApplyErr::InvalidSpec(_) => 3,
+        ApplyErr::RepoIssue(_) => 4,
+        ApplyErr::Conflicts { .. } => 2,
+        ApplyErr::Internal(_) => 5,
     }
 }
 
@@ -201,6 +239,40 @@ pub fn normalize_err(e: anyhow::Error) -> ApplyCliError {
     } else {
         ApplyCliError::Internal(msg)
     }
+}
+
+/// Enhanced error normalization with proper type classification
+pub fn normalize_err_typed(e: anyhow::Error) -> (ApplyErr, i32) {
+    // Parse error classification
+    let msg = format!("{e:#}");
+
+    // Check for specific error patterns first
+    if let Some(cc) = e.downcast_ref::<crate::core::git::CombinedConflictError>() {
+        let details = cc.internal_conflicts.clone();
+        let err = ApplyErr::Conflicts { details };
+        return (err, 2);
+    }
+
+    if msg.contains("Parse error") || msg.contains("EBNF") || msg.contains("syntax") {
+        return (ApplyErr::InvalidSpec(msg), 3);
+    }
+
+    if msg.contains("repository") || msg.contains("git") || msg.contains("boundary") {
+        return (ApplyErr::RepoIssue(msg), 4);
+    }
+
+    if msg.contains("conflict") || msg.contains("merge") || msg.contains("mismatch") {
+        return (
+            ApplyErr::Conflicts {
+                details: vec![msg.clone()],
+            },
+            2,
+        );
+    }
+
+    // Default to internal error
+    let err = ApplyErr::Internal(e);
+    (err, 5)
 }
 
 /// Core edit engine
@@ -830,27 +902,8 @@ impl EditEngine {
             updated_content.push_str(nl);
         }
 
-        // Write updated content atomically with preserved permissions
-        let meta = fs::metadata(file_path)?;
-        let perms = meta.permissions();
-
-        // Create a temp file in the same directory
-        let parent = file_path
-            .parent()
-            .ok_or_else(|| anyhow::anyhow!("No parent directory"))?;
-        let mut tf = tempfile::NamedTempFile::new_in(parent).context("create temp file")?;
-
-        // Write the content fully
-        use std::io::Write;
-        tf.write_all(updated_content.as_bytes())
-            .context("write temp file")?;
-
-        // Apply permissions to the temp file (best effort)
-        fs::set_permissions(tf.path(), perms.clone()).context("set temp permissions")?;
-
-        // Atomically replace the destination
-        tf.persist(file_path)
-            .map_err(|e| anyhow::anyhow!("replace file atomically: {}", e))?;
+        // Atomic write with robust temp file strategy
+        write_atomic(file_path, updated_content.as_bytes())?;
 
         Ok(())
     }
@@ -1170,6 +1223,54 @@ fn get_clipboard_content() -> Result<String> {
         .get_text()
         .context("Failed to get text from clipboard")
 }
+
+/// Atomic write with robust temp file strategy
+fn write_atomic(path: &Path, data: &[u8]) -> Result<()> {
+    // Prefer same-dir tempfile; fall back to OS temp on EPERM/ENOENT
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+
+    // Preserve original permissions
+    let perms = fs::metadata(path)
+        .map(|m| m.permissions())
+        .unwrap_or_else(|_| std::fs::Permissions::from_mode(0o644));
+
+    let tmp = match tempfile::NamedTempFile::new_in(dir) {
+        Ok(t) => t,
+        Err(_) => tempfile::NamedTempFile::new()?, // fallback to /tmp
+    };
+
+    // Write the content fully
+    use std::io::Write;
+    let mut file = tmp.as_file();
+    file.set_len(0)?;
+    file.write_all(data)?;
+    file.sync_all()?;
+
+    // Apply permissions to the temp file (best effort)
+    fs::set_permissions(tmp.path(), perms).context("set temp permissions")?;
+
+    // fsync parent dir to ensure durability on Unix
+    #[cfg(unix)]
+    {
+        if let Ok(parent_file) = std::fs::File::open(dir) {
+            let _ = parent_file.sync_all();
+        }
+    }
+
+    // Atomically replace the destination
+    match tmp.persist(path) {
+        Ok(_) => {}
+        Err(e) => {
+            // Different filesystem? Try copy fallback
+            std::fs::copy(e.file.path(), path)?;
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 
 #[cfg(test)]
 mod tests {
