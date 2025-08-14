@@ -105,6 +105,11 @@ impl GitEngine {
         })
     }
 
+    /// Get engine options
+    pub fn options(&self) -> &GitOptions {
+        &self.options
+    }
+
     /// Check if patch can be applied (preview mode)
     pub fn check(&self, patch_set: &PatchSet) -> Result<GitOutcome> {
         let patch_content = crate::core::patch::render_unified_diff(patch_set);

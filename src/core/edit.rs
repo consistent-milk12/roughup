@@ -171,11 +171,15 @@ pub fn discover_repo_root(explicit: Option<PathBuf>, start: &Path) -> Result<Opt
         }
     }
 
-    // 3) ascend to find .git
+    // 3) ascend to find .git (directory or worktree file)
     let mut cur = Some(start);
     while let Some(dir) = cur {
-        if dir.join(".git").exists() {
-            return Ok(Some(dir.to_path_buf()));
+        let git_path = dir.join(".git");
+        if git_path.exists() {
+            // Check if it's a directory (.git directory) or file (git worktree)
+            if git_path.is_dir() || git_path.is_file() {
+                return Ok(Some(dir.to_path_buf()));
+            }
         }
         cur = dir.parent();
     }
@@ -889,26 +893,43 @@ pub fn apply_run(args: ApplyArgs, ctx: &AppContext) -> Result<()> {
     let repo_root = discover_repo_root(args.repo_root.clone(), &cwd)
         .context("Failed to detect repository root")?;
 
-    // 5) Create engine via factory
-    let need_repo = matches!(
-        args.engine,
-        crate::cli::ApplyEngine::Git | crate::cli::ApplyEngine::Auto
-    );
-    if need_repo && repo_root.is_none() {
-        return Err(ApplyCliError::Repo(
-            "Git engine requires a repository, but none found. Use --engine=internal or initialize a git repo.".to_string(),
-        ).into());
-    }
-
-    let engine = create_engine(
-        &args.engine,
-        &args.git_mode,
-        &args.whitespace,
-        args.backup,
-        args.force,
-        repo_root.unwrap_or_else(|| cwd.clone()),
-    )
-    .map_err(|e| ApplyCliError::Internal(format!("Engine creation failed: {}", e)))?;
+    // 5) Create engine via factory with auto-fallback support
+    let engine: Box<dyn crate::core::apply_engine::ApplyEngine> =
+        match (&args.engine, repo_root.clone()) {
+            (crate::cli::ApplyEngine::Git, None) => {
+                return Err(ApplyCliError::Repo(
+                    "Git engine requires a repository. Use --engine=internal or init a repo."
+                        .to_string(),
+                )
+                .into());
+            }
+            (crate::cli::ApplyEngine::Auto, None) => {
+                // Degrade gracefully to internal-only auto
+                if !ctx.quiet {
+                    eprintln!("No git repository found, using internal engine for --engine=auto");
+                }
+                create_engine(
+                    &crate::cli::ApplyEngine::Internal,
+                    &args.git_mode,
+                    &args.whitespace,
+                    args.backup,
+                    args.force,
+                    cwd.clone(),
+                    args.context_lines,
+                )
+                .map_err(|e| ApplyCliError::Internal(format!("Engine creation failed: {}", e)))?
+            }
+            _ => create_engine(
+                &args.engine,
+                &args.git_mode,
+                &args.whitespace,
+                args.backup,
+                args.force,
+                repo_root.unwrap_or_else(|| cwd.clone()),
+                args.context_lines,
+            )
+            .map_err(|e| ApplyCliError::Internal(format!("Engine creation failed: {}", e)))?,
+        };
 
     // 6) Always check() first for consistent preview
     let preview = engine.check(&spec).map_err(normalize_err)?;
@@ -930,6 +951,7 @@ pub fn apply_run(args: ApplyArgs, ctx: &AppContext) -> Result<()> {
             for conflict in &preview.conflicts {
                 eprintln!("  • {}", conflict);
             }
+            eprintln!("Suggestion: Use --engine=git --mode=3way for robust conflict resolution");
         }
 
         if !args.force {
@@ -987,7 +1009,7 @@ pub fn finish_with_exit(result: Result<()>) -> ! {
     }
 }
 
-/// Preview edit changes without applying them
+/// Preview edit changes without applying them using unified engine architecture
 pub fn preview_run(args: PreviewArgs, ctx: &AppContext) -> Result<()> {
     let input = if args.from_clipboard {
         get_clipboard_content()?
@@ -998,53 +1020,65 @@ pub fn preview_run(args: PreviewArgs, ctx: &AppContext) -> Result<()> {
         anyhow::bail!("Must specify either --from-clipboard or provide edit file");
     };
 
-    let engine = EditEngine::new().with_preview(true);
-    let spec = engine
+    let legacy_engine = EditEngine::new();
+    let spec = legacy_engine
         .parse_edit_spec(&input)
         .context("Failed to parse edit specification")?;
 
-    if !ctx.quiet {
-        println!("Preview of {} file blocks:", spec.file_blocks.len());
-    }
+    let cwd = std::env::current_dir().context("Failed to get current directory")?;
+    let repo_root = discover_repo_root(args.repo_root.clone(), &cwd)
+        .context("Failed to detect repository root")?;
 
-    // For now, just show what would be changed
-    // TODO: Implement unified diff generation
-    for file_block in &spec.file_blocks {
-        println!("\n📁 File: {}", file_block.path.display());
-        for (i, op) in file_block.operations.iter().enumerate() {
-            match op {
-                EditOperation::Replace {
-                    start_line,
-                    end_line,
-                    old_content,
-                    new_content,
-                    ..
-                } => {
-                    println!("  {}. REPLACE lines {}-{}:", i + 1, start_line, end_line);
-                    println!(
-                        "     {} lines → {} lines",
-                        old_content.lines().count(),
-                        new_content.lines().count()
-                    );
-                }
-                EditOperation::Insert {
-                    at_line,
-                    new_content,
-                } => {
-                    println!(
-                        "  {}. INSERT at line {}: {} lines",
-                        i + 1,
-                        at_line,
-                        new_content.lines().count()
-                    );
-                }
-                EditOperation::Delete {
-                    start_line,
-                    end_line,
-                } => {
-                    println!("  {}. DELETE lines {}-{}", i + 1, start_line, end_line);
-                }
+    // Use same engine logic as apply_run for consistency
+    let engine: Box<dyn crate::core::apply_engine::ApplyEngine> =
+        match (&args.engine, repo_root.clone()) {
+            (crate::cli::ApplyEngine::Git, None) => {
+                return Err(ApplyCliError::Repo(
+                    "Git engine requires a repository. Use --engine=internal or init a repo."
+                        .to_string(),
+                )
+                .into());
             }
+            (crate::cli::ApplyEngine::Auto, None) => {
+                if !ctx.quiet {
+                    eprintln!("No git repository found, using internal engine for --engine=auto");
+                }
+                create_engine(
+                    &crate::cli::ApplyEngine::Internal,
+                    &args.git_mode,
+                    &args.whitespace,
+                    false, // backup
+                    args.force,
+                    cwd.clone(),
+                    3, // default context_lines for preview
+                )
+                .map_err(|e| ApplyCliError::Internal(format!("Engine creation failed: {}", e)))?
+            }
+            _ => create_engine(
+                &args.engine,
+                &args.git_mode,
+                &args.whitespace,
+                false, // backup
+                args.force,
+                repo_root.unwrap_or_else(|| cwd.clone()),
+                3, // default context_lines for preview
+            )
+            .map_err(|e| ApplyCliError::Internal(format!("Engine creation failed: {}", e)))?,
+        };
+
+    let preview = engine.check(&spec).map_err(normalize_err)?;
+
+    if !ctx.quiet {
+        if args.show_diff && !preview.patch_content.is_empty() {
+            println!("{}", preview.patch_content);
+        }
+        println!("{}", preview.summary);
+        if !preview.conflicts.is_empty() {
+            eprintln!("Found {} conflicts:", preview.conflicts.len());
+            for conflict in &preview.conflicts {
+                eprintln!("  • {}", conflict);
+            }
+            eprintln!("Suggestion: Use --engine=git --mode=3way for robust conflict resolution");
         }
     }
 

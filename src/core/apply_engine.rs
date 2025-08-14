@@ -50,13 +50,15 @@ pub trait ApplyEngine {
 pub struct InternalEngine {
     backup_enabled: bool,
     force_mode: bool,
+    context_lines: usize,
 }
 
 impl InternalEngine {
-    pub fn new(backup_enabled: bool, force_mode: bool) -> Self {
+    pub fn new(backup_enabled: bool, force_mode: bool, context_lines: usize) -> Self {
         Self {
             backup_enabled,
             force_mode,
+            context_lines,
         }
     }
 }
@@ -69,8 +71,11 @@ impl ApplyEngine for InternalEngine {
 
         let result = engine.apply(spec)?;
 
-        // Generate patch for preview
-        let config = PatchConfig::default();
+        // Generate patch for preview with configured context lines
+        let config = PatchConfig {
+            context_lines: self.context_lines,
+            ..PatchConfig::default()
+        };
         let patch_set = generate_patches(spec, &config)?;
         let patch_content = crate::core::patch::render_unified_diff(&patch_set);
 
@@ -134,7 +139,10 @@ impl GitEngineWrapper {
 
 impl ApplyEngine for GitEngineWrapper {
     fn check(&self, spec: &EditSpec) -> Result<Preview> {
-        let config = PatchConfig::default();
+        let config = PatchConfig {
+            context_lines: self.git_engine.options().context_lines as usize,
+            ..PatchConfig::default()
+        };
         let patch_set = generate_patches(spec, &config)?;
         let patch_content = crate::core::patch::render_unified_diff(&patch_set);
 
@@ -161,7 +169,10 @@ impl ApplyEngine for GitEngineWrapper {
     }
 
     fn apply(&self, spec: &EditSpec) -> Result<ApplyReport> {
-        let config = PatchConfig::default();
+        let config = PatchConfig {
+            context_lines: self.git_engine.options().context_lines as usize,
+            ..PatchConfig::default()
+        };
         let patch_set = generate_patches(spec, &config)?;
 
         let outcome = self.git_engine.apply(&patch_set)?;
@@ -189,7 +200,8 @@ pub struct HybridEngine {
 
 impl HybridEngine {
     pub fn new(backup_enabled: bool, force_mode: bool, git_options: GitOptions) -> Result<Self> {
-        let internal = InternalEngine::new(backup_enabled, force_mode);
+        let context_lines = git_options.context_lines as usize;
+        let internal = InternalEngine::new(backup_enabled, force_mode, context_lines);
         let git = GitEngineWrapper::new(git_options)?;
 
         Ok(Self { internal, git })
@@ -252,6 +264,7 @@ pub fn create_engine(
     backup_enabled: bool,
     force_mode: bool,
     repo_root: PathBuf,
+    context_lines: usize,
 ) -> Result<Box<dyn ApplyEngine>> {
     let git_options = GitOptions {
         repo_root,
@@ -265,12 +278,16 @@ pub fn create_engine(
             WhitespaceMode::Warn => crate::core::git::Whitespace::Warn,
             WhitespaceMode::Fix => crate::core::git::Whitespace::Fix,
         },
-        context_lines: 3,
+        context_lines: context_lines as u8,
         allow_outside_repo: false,
     };
 
     match engine_choice {
-        EngineChoice::Internal => Ok(Box::new(InternalEngine::new(backup_enabled, force_mode))),
+        EngineChoice::Internal => Ok(Box::new(InternalEngine::new(
+            backup_enabled,
+            force_mode,
+            context_lines,
+        ))),
         EngineChoice::Git => Ok(Box::new(GitEngineWrapper::new(git_options)?)),
         EngineChoice::Auto => Ok(Box::new(HybridEngine::new(
             backup_enabled,
@@ -306,7 +323,7 @@ mod tests {
             }],
         };
 
-        let engine = InternalEngine::new(false, false);
+        let engine = InternalEngine::new(false, false, 3);
         let preview = engine.check(&spec).unwrap();
 
         assert_eq!(preview.engine_used, Engine::Internal);

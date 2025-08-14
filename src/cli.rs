@@ -241,6 +241,26 @@ pub struct PreviewArgs {
     /// Show unified diff format
     #[arg(long, default_value = "true")]
     pub show_diff: bool,
+
+    /// Git repository root (auto-detected if not specified)
+    #[arg(long)]
+    pub repo_root: Option<PathBuf>,
+
+    /// Apply engine: internal (fast, clear errors), git (robust, 3-way merge), auto (fallback)
+    #[arg(long, default_value = "internal")]
+    pub engine: ApplyEngine,
+
+    /// Git apply mode when using git engine
+    #[arg(long, default_value = "3way")]
+    pub git_mode: GitMode,
+
+    /// Whitespace handling for git apply
+    #[arg(long, default_value = "nowarn")]
+    pub whitespace: WhitespaceMode,
+
+    /// Force apply even with conflicts
+    #[arg(long)]
+    pub force: bool,
 }
 
 #[derive(Parser)]
