@@ -21,6 +21,14 @@
 - Reference code as `file:line` format
 - Run lint/typecheck after changes
 
+## Implementation Efficiency Rules
+
+- When complete code is provided, implement directly without context analysis
+- Skip codebase exploration if implementation details are already specified
+- Use context extraction only for incomplete/partial implementations
+- Choose most direct path: complete code → direct write, partial code → analyze then implement
+- Never read existing files to understand patterns if implementation already follows them
+
 ## File Operations
 
 - Edit existing files over creating new ones

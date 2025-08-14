@@ -12,24 +12,26 @@ Privacy-first Rust CLI for LLM workflows: extract minimal code context, validate
 
 ## Production Status
 
-**Phases 1-2 Complete + Hardened Backup System**
+**Phases 1-3 Complete + Hardened Systems + 5 Critical Fixes**
 
 - Edit engine: EBNF parser, overlap detection, atomic writes
 - Hybrid apply: internal engine + git fallback, typed exit codes
 - Backup system: centralized `.rup/backups/`, BLAKE3 checksums, CLI management
-- Foundation: 10 critical fixes applied, all tests passing
+- Smart context: symbol indexing, token budgeting, relevance ranking, CLI integration
+- Foundation: 15 critical fixes applied, all tests passing
+- Latest fixes: unstable let-chain syntax, path constraints for new files, comprehensive overlap detection, newline preservation, session display formatting
 
 ## Implementation Priority Queue
 
-**Phase 3: Smart Context Assembly** [CRITICAL - Next]
+**Phase 3: Smart Context Assembly** [COMPLETED]
 
-- `symbol_index.rs`: load symbols.jsonl, exact/fuzzy lookup, spans
-- Relevance ranking: semantic embeddings → scope → proximity → git history
-- `budgeter.rs`: tiktoken-rs estimation, deterministic ordering, overflow strategies
+- symbol_index.rs`: load symbols.jsonl, exact/fuzzy lookup, spans
+- Relevance ranking: semantic → scope → proximity → git history
+- budgeter.rs`: tiktoken-rs estimation, deterministic ordering, overflow strategies
 - CLI: `rup context --budget --template [refactor|bugfix|feature] --semantic`
-- Target: <2s typical, <5s heavy; ±10% accuracy; deterministic
+- Performance: <2s typical, <5s heavy; ±10% accuracy; deterministic; all tests passing
 
-**Phase 3.5: Conflict Resolution** [After Phase 3]
+**Phase 3.5: Conflict Resolution** [NEXT - Critical Priority]
 
 - Parse conflict markers (ours/theirs/base), categorize, confidence scoring
 - `rup resolve --strategy --auto-resolve-safe` with TUI diff
@@ -79,10 +81,10 @@ Privacy-first Rust CLI for LLM workflows: extract minimal code context, validate
 
 ## Immediate Actions
 
-1. **Start Phase 3**: Implement symbol_index.rs + budgeter.rs cores
-2. **Context CLI**: Add `rup context` with budget/template/semantic flags
-3. **Validation**: Determinism tests, ±10% estimation accuracy, performance caps
-4. **Documentation**: Update README with context examples
+1. **Start Phase 3.5**: Implement conflict resolution engine and TUI
+2. **Conflict CLI**: Add `rup resolve` with strategy selection and auto-resolve
+3. **Validation**: Auto-resolution accuracy tests, determinism validation
+4. **Integration**: Wire conflict detection with existing apply operations
 
 ## Architecture Reference
 

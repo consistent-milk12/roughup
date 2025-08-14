@@ -108,7 +108,7 @@ pub struct Symbol {
 }
 
 /// Normalized symbol kinds across languages
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum SymbolKind {
     /// Free-standing function

@@ -222,6 +222,7 @@ pub fn discover_repo_root(explicit: Option<PathBuf>, start: &Path) -> Result<Opt
         && output.status.success()
     {
         let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
+
         if !s.is_empty() {
             return Ok(Some(PathBuf::from(s)));
         }
@@ -323,12 +324,19 @@ impl EditEngine {
 
     /// Parse edit specification from text
     pub fn parse_edit_spec(&self, input: &str) -> Result<EditSpec, ParseError> {
+        // Normalize CRLF and allow leading BOM on first line
+        let input = input.replace('\r', "");
         let mut file_blocks = Vec::new();
         let lines: Vec<&str> = input.lines().collect();
         let mut i = 0;
 
         while i < lines.len() {
-            let line = lines[i].trim();
+            // Trim and strip BOM once if present
+            let line = if i == 0 {
+                lines[i].trim_start_matches('\u{FEFF}').trim()
+            } else {
+                lines[i].trim()
+            };
 
             // Skip empty lines and comments
             if line.is_empty() || line.starts_with('#') {
@@ -339,7 +347,6 @@ impl EditEngine {
             // Parse FILE block
             if line.starts_with("FILE:") {
                 let path_str = line.strip_prefix("FILE:").unwrap().trim();
-
                 if path_str.is_empty() {
                     return Err(ParseError::InvalidFileBlock("Empty file path".to_string()));
                 }
@@ -352,21 +359,26 @@ impl EditEngine {
                 while i < lines.len() {
                     let op_line = lines[i].trim();
 
-                    // Break if we hit next FILE block
+                    // Break if next FILE begins
                     if op_line.starts_with("FILE:") {
                         break;
                     }
-                    // Skip blank lines between operations
-                    if op_line.is_empty() {
+
+                    // Skip blanks and comments between operations
+                    if op_line.is_empty() || op_line.starts_with('#') {
                         i += 1;
                         continue;
                     }
 
-                    // Parse operation
-                    if let Some(op) = self.parse_operation(&lines, &mut i)? {
-                        operations.push(op);
-                    } else {
-                        i += 1;
+                    let before = i;
+                    match self.parse_operation(&lines, &mut i)? {
+                        Some(op) => operations.push(op),
+                        None => {
+                            // parse_operation advanced i itself; if not, advance by one to avoid a stall
+                            if i == before {
+                                i += 1;
+                            }
+                        }
                     }
                 }
 
@@ -448,11 +460,39 @@ impl EditEngine {
         let (start_line, end_line) = self.parse_span(span_part)?;
         *i += 1;
 
-        // Parse OLD block
-        let old_content = self.parse_content_block(lines, i, "OLD:")?;
+        // Allow optional blank lines before OLD:
+        while *i < lines.len() && lines[*i].trim().is_empty() {
+            *i += 1;
+        }
 
-        // Parse NEW block
-        let new_content = self.parse_content_block(lines, i, "NEW:")?;
+        // Helper: strip ``` fences (with optional language) from a captured block
+        fn strip_fences(s: &str) -> String {
+            // Keep original newlines except CR, which we normalize elsewhere
+            let raw = s.trim_end_matches('\n');
+            let parts: Vec<&str> = raw.lines().collect();
+
+            if parts
+                .first()
+                .map(|l| l.trim_start().starts_with("```"))
+                .unwrap_or(false)
+                && parts
+                    .last()
+                    .map(|l| l.trim_start().starts_with("```"))
+                    .unwrap_or(false)
+                && parts.len() >= 2
+            {
+                return parts[1..parts.len() - 1].join("\n");
+            }
+
+            raw.to_string()
+        }
+
+        // Parse content blocks, then normalize
+        let old_raw = self.parse_content_block(lines, i, "OLD:")?;
+        let new_raw = self.parse_content_block(lines, i, "NEW:")?;
+
+        let old_content = strip_fences(&old_raw).replace('\r', "");
+        let new_content = strip_fences(&new_raw).replace('\r', "");
 
         Ok(Some(EditOperation::Replace {
             start_line,
@@ -805,8 +845,19 @@ impl EditEngine {
             .with_context(|| format!("Failed to read file: {:?}", file_path))?;
 
         // Detect original newline style and EOF newline presence
-        let use_crlf = content.contains("\r\n");
-        let had_final_nl = content.ends_with("\n") || content.ends_with("\r\n");
+        fn detect_nl(s: &str) -> (&'static str, bool) {
+            for w in s.as_bytes().windows(2) {
+                if w[1] == b'\n' {
+                    return (
+                        if w[0] == b'\r' { "\r\n" } else { "\n" },
+                        s.ends_with('\n') || s.ends_with("\r\n"),
+                    );
+                }
+            }
+            ("\n", s.ends_with('\n') || s.ends_with("\r\n"))
+        }
+        let (nl, had_final_nl) = detect_nl(&content);
+        let use_crlf = nl == "\r\n";
 
         // Build mutable lines without trailing '\r'
         let mut file_lines: Vec<String> = content
@@ -832,19 +883,41 @@ impl EditEngine {
                 _ => {}
             }
         }
+
+        // Sort and detect overlaps between range ops
         ranges.sort_by_key(|(s, e)| (*s, *e));
+        let mut problems: Vec<String> = Vec::new();
+
         for w in ranges.windows(2) {
             let (a_s, a_e) = w[0];
             let (b_s, b_e) = w[1];
             if b_s <= a_e {
-                return Err(anyhow::anyhow!(
-                    "Overlapping edits detected: {}-{} with {}-{}",
-                    a_s,
-                    a_e,
-                    b_s,
-                    b_e
+                problems.push(format!(
+                    "Overlapping edits: {}-{} with {}-{}",
+                    a_s, a_e, b_s, b_e
                 ));
             }
+        }
+
+        // INSERTs inside any range
+        for op in operations {
+            if let EditOperation::Insert { at_line, .. } = op {
+                for (s, e) in &ranges {
+                    if *at_line >= *s && *at_line <= *e {
+                        problems.push(format!(
+                            "Insert at {} overlaps with edit span {}-{}",
+                            at_line, s, e
+                        ));
+                    }
+                }
+            }
+        }
+
+        if !problems.is_empty() {
+            return Err(anyhow::anyhow!(
+                "Operation overlaps: {}",
+                problems.join("; ")
+            ));
         }
 
         // Stable sort with tie-breakers
@@ -945,8 +1018,10 @@ pub fn apply_run(args: ApplyArgs, ctx: &AppContext) -> Result<()> {
 
     // 2) Build edit specification
     let legacy_engine = EditEngine::new();
+    let input = normalize_edit_spec_text(&ebnf);
+
     let spec = legacy_engine
-        .parse_edit_spec(&ebnf)
+        .parse_edit_spec(&input)
         .map_err(|e| ApplyCliError::InvalidInput(format!("Parse error: {}", e)))?;
 
     // 3) Decide run mode: safe default is preview unless --apply was passed
@@ -1137,6 +1212,8 @@ pub fn preview_run(args: PreviewArgs, ctx: &AppContext) -> Result<()> {
     };
 
     let legacy_engine = EditEngine::new();
+    // Accept specs with fenced OLD/NEW and CRLF endings
+    let input = normalize_edit_spec_text(&input);
     let spec = legacy_engine
         .parse_edit_spec(&input)
         .context("Failed to parse edit specification")?;
@@ -1301,8 +1378,13 @@ fn print_session_line(s: &SessionInfo) {
         format!("  [{}]", s.sample_paths.join(", "))
     };
     println!(
-        "{}  {}  {}  files={}  {}{}",
-        s.timestamp, s.id, s.engine, s.files, status, samples
+        "{timestamp:<19} {id:<12} {engine:<10} files={files:>4} {status:<7}{samples}",
+        timestamp = s.timestamp,
+        id = s.id,
+        engine = s.engine,
+        files = s.files,
+        status = status,
+        samples = samples
     );
 }
 
@@ -1528,6 +1610,62 @@ fn write_atomic(path: &Path, data: &[u8]) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn normalize_edit_spec_text(src: &str) -> String {
+    // 1) Normalize line endings to LF
+    let src = src.replace('\r', "");
+
+    // 2) Strip ``` fences that immediately follow OLD:/NEW: markers
+    // State machine over lines
+    let mut out = String::with_capacity(src.len());
+    #[derive(Copy, Clone, PartialEq)]
+    enum Block {
+        None,
+        Old,
+        New,
+    }
+    let mut blk = Block::None;
+    let mut in_fence = false;
+
+    for line in src.lines() {
+        let t = line.trim_start();
+
+        // Enter markers
+        if t.eq_ignore_ascii_case("OLD:") {
+            blk = Block::Old;
+            in_fence = false;
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        }
+        if t.eq_ignore_ascii_case("NEW:") {
+            blk = Block::New;
+            in_fence = false;
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        }
+
+        // Right after OLD:/NEW:, skip a leading fence if present
+        if !in_fence && (blk == Block::Old || blk == Block::New) && t.starts_with("```") {
+            // Begin fenced body; do not emit the fence line
+            in_fence = true;
+            continue;
+        }
+
+        // Inside a fenced OLD/NEW body: drop the closing fence line
+        if in_fence && t.starts_with("```") {
+            in_fence = false;
+            // Keep block mode (still inside OLD/NEW) but do not emit fence
+            continue;
+        }
+
+        out.push_str(line);
+        out.push('\n');
+    }
+
+    out
 }
 
 #[cfg(test)]

@@ -36,5 +36,7 @@ fn main() -> Result<()> {
         Commands::Init(args) => roughup::infra::config::init(args, &ctx),
 
         Commands::Completions(args) => roughup::completion::run(args, &ctx),
+
+        Commands::Context(args) => roughup::core::context::run(args, &ctx),
     }
 }

@@ -63,6 +63,9 @@ pub enum Commands {
 
     /// Generate shell completions
     Completions(CompletionsArgs),
+
+    /// Assemble a smart, token-budgeted context for LLMs
+    Context(ContextArgs),
 }
 
 #[derive(Parser)]
@@ -85,6 +88,30 @@ pub struct ExtractArgs {
     /// Copy result to clipboard
     #[arg(long)]
     pub clipboard: bool,
+
+    /// Add N lines of context around each range (before and after)
+    #[arg(long, default_value = "0")]
+    pub context: usize,
+
+    /// Merge ranges that are at most N lines apart
+    #[arg(long, default_value = "0")]
+    pub merge_within: usize,
+
+    /// Use this GPT model for token estimation (e.g., gpt-4o, o200k_base)
+    #[arg(long, default_value = "gpt-4o")]
+    pub model: String,
+
+    /// Token budget for the final assembled context
+    #[arg(long)]
+    pub budget: Option<usize>,
+
+    /// Remove common leading indentation within each snippet
+    #[arg(long)]
+    pub dedent: bool,
+
+    /// Squeeze blank lines in the output
+    #[arg(long, default_value = "false")]
+    pub squeeze_blank: bool,
 }
 
 #[derive(Parser)]
@@ -429,4 +456,71 @@ pub struct CompletionsArgs {
     /// Print completion script to stdout instead of a file
     #[arg(long)]
     pub stdout: bool,
+}
+
+#[derive(Debug, Clone, clap::ValueEnum)]
+pub enum ContextTemplate {
+    Refactor,
+    Bugfix,
+    Feature,
+    Freeform,
+}
+
+#[derive(Parser, Debug)]
+pub struct ContextArgs {
+    /// Query strings (symbol names or qualified names)
+    #[arg(value_name = "QUERY", required = true)]
+    pub queries: Vec<String>,
+
+    /// Project root (used for relative paths)
+    #[arg(long, default_value = ".")]
+    pub path: std::path::PathBuf,
+
+    /// Symbols index file (JSONL) produced by `rup symbols`
+    #[arg(long, default_value = "symbols.jsonl")]
+    pub symbols: std::path::PathBuf,
+
+    /// GPT model or encoding for token estimation (e.g., gpt-4o, o200k_base)
+    #[arg(long, default_value = "gpt-4o")]
+    pub model: Option<String>,
+
+    /// Token budget for the final assembled context
+    #[arg(long, default_value = "6000")]
+    pub budget: Option<usize>,
+
+    /// Use fuzzy/semantic matching in addition to exact/substring
+    #[arg(long)]
+    pub semantic: bool,
+
+    /// Preferred template
+    #[arg(long, value_enum, default_value_t = ContextTemplate::Freeform)]
+    pub template: ContextTemplate,
+
+    /// Anchor file to prefer for local scope/proximity ranking
+    #[arg(long)]
+    pub anchor: Option<std::path::PathBuf>,
+
+    /// Anchor line number (1-based)
+    #[arg(long)]
+    pub anchor_line: Option<usize>,
+
+    /// Limit per-query candidates before merging
+    #[arg(long, default_value_t = 8)]
+    pub top_per_query: usize,
+
+    /// Overall maximum candidates to include before budget
+    #[arg(long, default_value_t = 256)]
+    pub limit: usize,
+
+    /// Wrap excerpts in fenced code blocks
+    #[arg(long)]
+    pub fence: bool,
+
+    /// Emit JSON output (single-line)
+    #[arg(long)]
+    pub json: bool,
+
+    /// Copy result to clipboard
+    #[arg(long)]
+    pub clipboard: bool,
 }

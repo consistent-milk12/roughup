@@ -52,6 +52,12 @@ pub mod core {
     /// Token-aware content chunking for LLM workflows with tiktoken integration
     pub mod chunk;
     pub use chunk::run as chunk_run;
+
+    pub mod budgeter;
+    pub mod context;
+    /// Smart context assembly (Phase 3)
+    pub mod symbol_index;
+    pub use context::run as context_run;
 }
 
 /// Language processing - AST parsing and symbol extraction with moka caching
@@ -94,10 +100,13 @@ pub mod infra {
 // Strategic re-exports for clean CLI interface
 pub use cli::{AppContext, Cli, Commands};
 pub use core::{
-    chunk_run, extract_run, generate_patches, render_unified_diff, symbols_run, tree_run,
+    chunk_run, context_run, extract_run, generate_patches, render_unified_diff, symbols_run,
+    tree_run,
 };
 pub use infra::{Config, FileWalker, load_config};
 pub use parsers::{PythonExtractor, RustExtractor, SymbolExtractor};
+// Phase 3 re-exports
+pub use core::context;
 
 // Core types for external consumers
 pub use core::symbols::{Symbol, SymbolKind, Visibility};
