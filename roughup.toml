@@ -1,3 +1,28 @@
+[walk]
+ignore = ["target/**", "node_modules/**", ".git/**"]
+depth = 3
+
+[extract]
+annotate = true
+fence = true
+
+[symbols]
+languages = ["rust", "python"]
+include_private = false
+
+[chunk]
+model = "gpt-4o"
+max_tokens = 4000
+overlap = 128
+by_symbols = true
+
+[apply]
+engine = "auto"        # Smart fallback (internal → git)
+git_mode = "3way"      # Resilient apply
+backup = true          # Always keep a backup
+context_lines = 3
+force = false          # Require explicit --force to override
+whitespace = "nowarn"  # LLM-friendly whitespace handling
 ignore_patterns = [
     "target/",
     "node_modules/",
@@ -19,7 +44,11 @@ output_file = "extracted_source.txt"
 show_hidden = false
 
 [symbols]
-languages = ["rust", "python", "javascript"]
+languages = [
+    "rust",
+    "python",
+    "javascript",
+]
 include_private = false
 output_file = "symbols.jsonl"
 

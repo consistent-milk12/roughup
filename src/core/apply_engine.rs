@@ -3,16 +3,17 @@
 //! Provides common interface for internal and git engines with
 //! automatic fallback and user-friendly reporting.
 
-use anyhow::Result;
-use std::path::PathBuf;
+use anyhow::{Context, Result};
+use std::path::{Path, PathBuf};
 
 use crate::cli::{ApplyEngine as EngineChoice, GitMode, WhitespaceMode};
+use crate::core::backup::BackupManager;
 use crate::core::edit::EditSpec;
 use crate::core::git::{GitEngine, GitOptions};
 use crate::core::patch::{PatchConfig, generate_patches};
 
 /// Engine selection for apply operations
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub enum Engine {
     Internal,
     Git,
@@ -28,13 +29,33 @@ pub struct Preview {
     pub engine_used: Engine,
 }
 
-/// Apply operation result
+/// Context for apply operations carrying repo, backup session, and runtime flags
 #[derive(Debug)]
+pub struct ApplyContext<'a> {
+    /// Absolute path to the repository root
+    pub repo_root: &'a Path,
+    /// Optional centralized backup session for this apply
+    pub backup: Option<&'a mut BackupManager>,
+    /// Whitespace handling mode
+    pub whitespace: WhitespaceMode,
+    /// Context lines for patches
+    pub context_lines: usize,
+    /// Force mode flag
+    pub force: bool,
+}
+
+/// Apply operation result
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct ApplyReport {
     pub applied_files: Vec<PathBuf>,
     pub conflicts: Vec<String>,
     pub engine_used: Engine,
+    /// Legacy-compatible: now points to session directory
     pub backup_paths: Vec<PathBuf>,
+    /// New: first-class session info
+    pub backup_session_id: Option<String>,
+    pub backup_manifest_path: Option<PathBuf>,
+    pub backup_file_count: Option<usize>,
 }
 
 /// Unified apply engine trait
@@ -42,12 +63,41 @@ pub trait ApplyEngine {
     /// Check if edit spec can be applied (preview mode)
     fn check(&self, spec: &EditSpec) -> Result<Preview>;
 
-    /// Apply edit specification
-    fn apply(&self, spec: &EditSpec) -> Result<ApplyReport>;
+    /// New: contextful API (preferred) - apply edit specification with context
+    fn apply_with_ctx(&self, spec: &EditSpec, ctx: ApplyContext<'_>) -> Result<ApplyReport>;
+
+    /// Old: backward-compatible default impl forwards without backup/session
+    fn apply(&self, spec: &EditSpec) -> Result<ApplyReport> {
+        // Create default context without backup session
+        let ctx = ApplyContext {
+            repo_root: Path::new("."), // Default to current directory
+            backup: None,
+            whitespace: WhitespaceMode::Nowarn,
+            context_lines: 3,
+            force: false,
+        };
+        self.apply_with_ctx(spec, ctx)
+    }
+}
+
+/// Turns absolute file path into repo-relative path or errors.
+/// Enforces boundary to keep backups inside repo root.
+fn make_relative_to_repo(file_path: &Path, repo_root: &Path) -> Result<PathBuf> {
+    file_path
+        .strip_prefix(repo_root)
+        .map(|p| p.to_path_buf())
+        .with_context(|| {
+            format!(
+                "File {} is outside repository {}",
+                file_path.display(),
+                repo_root.display()
+            )
+        })
 }
 
 /// Internal engine implementation
 pub struct InternalEngine {
+    #[expect(unused, reason = "Moved to Centralized BackupManager")]
     backup_enabled: bool,
     force_mode: bool,
     context_lines: usize,
@@ -136,12 +186,29 @@ impl ApplyEngine for InternalEngine {
         })
     }
 
-    fn apply(&self, spec: &EditSpec) -> Result<ApplyReport> {
+    fn apply_with_ctx(&self, spec: &EditSpec, mut ctx: ApplyContext<'_>) -> Result<ApplyReport> {
+        let mut applied = Vec::new();
+
+        // If centralized backup is enabled, back up files before modification
+        if let Some(backup_manager) = ctx.backup.as_mut() {
+            for file_block in &spec.file_blocks {
+                // Check if this block will modify the file
+                let will_modify = !file_block.operations.is_empty();
+                if will_modify {
+                    // Convert to repo-relative path for backup
+                    let rel_path = make_relative_to_repo(&file_block.path, ctx.repo_root)?;
+                    backup_manager.backup_file(&rel_path)?;
+                }
+            }
+        }
+
+        // Apply using existing edit engine (without its own backup since we handle centrally)
         let engine = crate::core::edit::EditEngine::new()
-            .with_backup(self.backup_enabled)
-            .with_force(self.force_mode);
+            .with_backup(false) // Disable internal backup, we handle it centrally
+            .with_force(ctx.force);
 
         let result = engine.apply(spec)?;
+        applied.extend(result.applied_files);
 
         let conflicts = crate::core::git::render_conflict_summary(
             &result
@@ -182,11 +249,30 @@ impl ApplyEngine for InternalEngine {
                 .collect::<Vec<_>>(),
         );
 
+        // Finalize backup session if present
+        let (session_id, session_dir, file_count) =
+            if let Some(backup_manager) = ctx.backup.as_mut() {
+                let success = conflicts.is_empty(); // Success if no conflicts
+                backup_manager.finalize(success)?;
+                (
+                    Some(backup_manager.session_id().to_string()),
+                    Some(backup_manager.session_dir().to_path_buf()),
+                    Some(backup_manager.file_count()),
+                )
+            } else {
+                (None, None, None)
+            };
+
         Ok(ApplyReport {
-            applied_files: result.applied_files,
+            applied_files: applied,
             conflicts,
             engine_used: Engine::Internal,
-            backup_paths: result.backup_paths,
+            // Legacy-compatible: session directory in backup_paths
+            backup_paths: session_dir.iter().cloned().collect(),
+            // New fields
+            backup_session_id: session_id,
+            backup_manifest_path: session_dir.as_ref().map(|d| d.join("manifest.json")),
+            backup_file_count: file_count,
         })
     }
 }
@@ -230,22 +316,50 @@ impl ApplyEngine for GitEngineWrapper {
         })
     }
 
-    fn apply(&self, spec: &EditSpec) -> Result<ApplyReport> {
+    fn apply_with_ctx(&self, spec: &EditSpec, mut ctx: ApplyContext<'_>) -> Result<ApplyReport> {
         let config = PatchConfig {
-            context_lines: self.git_engine.options().context_lines as usize,
+            context_lines: ctx.context_lines,
             ..PatchConfig::default()
         };
         let patch_set = generate_patches(spec, &config)?;
+
+        // If centralized backup is enabled, back up files that git will modify
+        if let Some(backup_manager) = ctx.backup.as_mut() {
+            for file_patch in &patch_set.file_patches {
+                let file_path = Path::new(&file_patch.path);
+                let rel_path = make_relative_to_repo(file_path, ctx.repo_root)?;
+                backup_manager.backup_file(&rel_path)?;
+            }
+        }
 
         let outcome = self.git_engine.apply(&patch_set)?;
 
         let conflicts = crate::core::git::render_conflict_summary(&outcome.conflicts);
 
+        // Finalize backup session if present
+        let (session_id, session_dir, file_count) =
+            if let Some(backup_manager) = ctx.backup.as_mut() {
+                let success = conflicts.is_empty(); // Success if no conflicts
+                backup_manager.finalize(success)?;
+                (
+                    Some(backup_manager.session_id().to_string()),
+                    Some(backup_manager.session_dir().to_path_buf()),
+                    Some(backup_manager.file_count()),
+                )
+            } else {
+                (None, None, None)
+            };
+
         Ok(ApplyReport {
             applied_files: outcome.applied_files,
             conflicts,
             engine_used: Engine::Git,
-            backup_paths: Vec::new(), // Git doesn't create backups
+            // Legacy-compatible: session directory in backup_paths
+            backup_paths: session_dir.iter().cloned().collect(),
+            // New fields
+            backup_session_id: session_id,
+            backup_manifest_path: session_dir.as_ref().map(|d| d.join("manifest.json")),
+            backup_file_count: file_count,
         })
     }
 }
@@ -307,24 +421,52 @@ impl ApplyEngine for HybridEngine {
         }
     }
 
-    fn apply(&self, spec: &EditSpec) -> Result<ApplyReport> {
-        // Try internal first
-        match self.internal.apply(spec) {
-            Ok(report) if report.conflicts.is_empty() => Ok(report),
+    fn apply_with_ctx(&self, spec: &EditSpec, ctx: ApplyContext<'_>) -> Result<ApplyReport> {
+        // For HybridEngine, we need to manually manage backup since engines finalize independently
+        // This is a limitation of the current design that we document for future improvements
+
+        // Save context values before moving ctx (for fallback)
+        let repo_root = ctx.repo_root;
+        let whitespace = ctx.whitespace;
+        let context_lines = ctx.context_lines;
+        let force = ctx.force;
+
+        // Try internal engine first (it will handle backup if needed)
+        let internal_result = self.internal.apply_with_ctx(spec, ctx);
+
+        match internal_result {
+            Ok(report) if report.conflicts.is_empty() => {
+                // Internal succeeded without conflicts
+                Ok(report)
+            }
             Ok(internal_report) => {
-                // Internal has conflicts; attempt git if available
+                // Internal has conflicts; attempt git fallback if available
                 if let Some(git) = &self.git {
-                    match git.apply(spec) {
+                    // Note: Internal engine has already finalized its backup session
+                    // Git fallback runs without backup (design limitation)
+                    let git_ctx = ApplyContext {
+                        repo_root,
+                        backup: None, // No backup for fallback since internal already handled it
+                        whitespace,
+                        context_lines,
+                        force,
+                    };
+
+                    match git.apply_with_ctx(spec, git_ctx) {
                         Ok(mut git_report) => {
+                            // Git succeeded - combine reports
                             git_report.engine_used = Engine::Auto;
-                            // Optionally surface that internal had conflicts but git resolved them:
-                            if !internal_report.conflicts.is_empty() {
-                                git_report.conflicts.extend(internal_report.conflicts);
-                            }
+                            // Preserve internal's backup info
+                            git_report.backup_paths = internal_report.backup_paths;
+                            git_report.backup_session_id = internal_report.backup_session_id;
+                            git_report.backup_manifest_path = internal_report.backup_manifest_path;
+                            git_report.backup_file_count = internal_report.backup_file_count;
+
+                            // Note: git_report.conflicts should be empty since Git succeeded
                             Ok(git_report)
                         }
                         Err(err) => {
-                            // Return a combined conflict report via error so CLI can emit exit 2
+                            // Both engines failed - return combined error
                             let combined = crate::core::git::CombinedConflictError::new(
                                 internal_report.conflicts.clone(),
                                 format!("git_apply_failed: {err}"),
@@ -333,7 +475,7 @@ impl ApplyEngine for HybridEngine {
                         }
                     }
                 } else {
-                    // No git available; escalate as conflicts so CLI returns code 2
+                    // No git available; return internal conflicts as error
                     let combined = crate::core::git::CombinedConflictError::new(
                         internal_report.conflicts.clone(),
                         "git_unavailable".into(),
@@ -342,9 +484,17 @@ impl ApplyEngine for HybridEngine {
                 }
             }
             Err(e) => {
-                // Internal failed; try git if available, otherwise propagate
+                // Internal failed completely; try git if available
+                // We can't use the moved ctx here, so create a new context
                 if let Some(git) = &self.git {
-                    git.apply(spec)
+                    let fallback_ctx = ApplyContext {
+                        repo_root,
+                        backup: None, // No backup available at this point
+                        whitespace,
+                        context_lines,
+                        force,
+                    };
+                    git.apply_with_ctx(spec, fallback_ctx)
                         .map(|mut r| {
                             r.engine_used = Engine::Auto;
                             r

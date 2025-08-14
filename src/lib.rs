@@ -1,4 +1,4 @@
-//! **roughup** - Super-fast Rust CLI for extracting/packaging source code for LLM workflows
+//! **roughup** - Super-fast Rust CLI for extracting/packaging source code for LLM workflows (test)
 //!
 //! Smart gitignore-aware processing with parallel execution and tree-sitter symbol extraction.
 //! Performance-first design with memory-mapped I/O and AST caching.
@@ -18,6 +18,14 @@ pub mod core {
     /// Edit format parsing and application system for LLM collaboration
     pub mod edit;
     pub use edit::{EditConflict, EditEngine, EditOperation, EditResult, EditSpec};
+
+    /// Centralized backup system with session-scoped storage
+    pub mod backup;
+    pub use backup::{BackupManager, SessionManifest, list_sessions, read_session_manifest};
+
+    /// Backup session management operations (list, show, restore, cleanup)
+    pub mod backup_ops;
+    pub use backup_ops::{SessionInfo, ListRequest, ShowRequest, ShowResponse};
 
     /// EBNF to unified diff patch converter for Git integration
     pub mod patch;

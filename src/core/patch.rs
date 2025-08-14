@@ -76,8 +76,24 @@ pub fn generate_patches(spec: &EditSpec, config: &PatchConfig) -> Result<PatchSe
     for file_block in &spec.file_blocks {
         let path_str = file_block.path.to_string_lossy().to_string();
 
-        // Re-validate CID at generation time to avoid TOCTOU
-        if config.validate_guards {
+        // Re-validate CID only when needed, and only on existing files
+        let needs_validation = config.validate_guards
+            && file_block.operations.iter().any(|op| {
+                matches!(
+                    op,
+                    EditOperation::Replace {
+                        guard_cid: Some(_),
+                        ..
+                    }
+                )
+            });
+
+        if needs_validation {
+            if !Path::new(&path_str).exists() {
+                // If a guarded REPLACE targets a missing file, that's a real preimage problem.
+                anyhow::bail!("Guard validation failed: {} does not exist", path_str);
+            }
+
             let current_content = std::fs::read_to_string(&file_block.path).with_context(|| {
                 format!("Failed to re-read file for CID validation: {}", path_str)
             })?;
@@ -133,9 +149,22 @@ fn generate_file_patch(
 ) -> Result<FilePatch> {
     let path = Path::new(path_str);
 
-    // Read current file content
-    let content =
-        fs::read_to_string(path).with_context(|| format!("Failed to read file: {}", path_str))?;
+    // Read current file content (handle new files for INSERT operations)
+    let content = if path.exists() {
+        fs::read_to_string(path).with_context(|| format!("Failed to read file: {}", path_str))?
+    } else {
+        // Check if all operations are INSERTs - new file creation
+        let all_inserts = operations
+            .iter()
+            .all(|op| matches!(op, EditOperation::Insert { .. }));
+        if !all_inserts {
+            anyhow::bail!(
+                "File {} does not exist and contains non-INSERT operations",
+                path_str
+            );
+        }
+        String::new() // Empty file for new file creation
+    };
     let file_lines: Vec<&str> = content.lines().collect();
 
     // Convert operations to hunks
@@ -279,8 +308,12 @@ fn operation_to_hunk(
             let insert_pos = *at_line; // 0 means beginning, N means after line N
             let new_lines: Vec<&str> = new_content.lines().collect();
 
-            // Context around insertion point
-            let context_start = insert_pos.saturating_sub(config.context_lines).max(1);
+            // Context around insertion point - handle empty files
+            let context_start = if file_lines.is_empty() {
+                1 // Start at line 1 for empty files
+            } else {
+                insert_pos.saturating_sub(config.context_lines).max(1)
+            };
             let context_end = (insert_pos + config.context_lines).min(file_lines.len());
 
             let mut hunk_lines = Vec::new();
@@ -306,11 +339,18 @@ fn operation_to_hunk(
                 }
             }
 
+            // Calculate counts safely to avoid underflow
+            let old_count = if context_end >= context_start {
+                context_end - context_start + 1
+            } else {
+                0 // Empty file case
+            };
+
             Ok(Hunk {
                 old_start: context_start,
-                old_count: context_end - context_start + 1,
+                old_count,
                 new_start: context_start,
-                new_count: (context_end - context_start + 1) + new_lines.len(),
+                new_count: old_count + new_lines.len(),
                 lines: hunk_lines,
             })
         }

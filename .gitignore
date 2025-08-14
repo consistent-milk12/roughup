@@ -1,5 +1,16 @@
-.git
-/target
-Cargo.lock
-diff.rs
-.docs
+# Build
+/target/
+
+# Editor/OS
+.DS_Store
+*.swp
+*.swo
+
+# Roughup artifacts
+/chunks/
+/symbols.jsonl
+*.rup.bak.*
+/.rup/
+
+# Node (if present)
+/node_modules/

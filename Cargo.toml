@@ -26,6 +26,7 @@ config = "0.15.13"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.142"
 toml = "0.9.5"
+chrono = { version = "0.4.39", features = ["serde"] }
 
 anyhow = "1.0.99"
 thiserror = "2.0.14"
@@ -59,6 +60,8 @@ xxhash-rust = { version = "0.8.15", features = ["xxh64"] }
 
 # Atomic file operations
 tempfile = "3.20.0"
+blake3 = "1.8.2"
+rand = { version = "0.8", features = ["std"] }
 
 [build-dependencies]
 cc = "*" # helps some tree-sitter grammar builds on CI

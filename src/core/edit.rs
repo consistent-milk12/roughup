@@ -989,7 +989,7 @@ pub fn apply_run(args: ApplyArgs, ctx: &AppContext) -> Result<()> {
                 &args.whitespace,
                 args.backup,
                 args.force,
-                repo_root.unwrap_or_else(|| cwd.clone()),
+                repo_root.clone().unwrap_or_else(|| cwd.clone()),
                 args.context_lines,
             )
             .map_err(|e| ApplyCliError::Internal(format!("Engine creation failed: {}", e)))?,
@@ -1035,25 +1035,67 @@ pub fn apply_run(args: ApplyArgs, ctx: &AppContext) -> Result<()> {
         return Ok(());
     }
 
-    // 10) Apply for real
-    let report = engine.apply(&spec).map_err(|e| {
-        let (kind, _code) = normalize_err_typed(e);
-        ApplyCliError::from(kind)
-    })?;
+    // 10) Apply for real - set up backup session if enabled
+    let report = if args.backup {
+        // Create backup manager and use contextual API
+        let mut backup_manager = crate::core::backup::BackupManager::begin(
+            repo_root.as_ref().unwrap_or(&cwd),
+            match args.engine {
+                crate::cli::ApplyEngine::Internal => "internal",
+                crate::cli::ApplyEngine::Git => "git",
+                crate::cli::ApplyEngine::Auto => "auto",
+            },
+        )
+        .map_err(|e| ApplyCliError::Internal(format!("Backup setup failed: {}", e)))?;
 
-    // 11) Report results and return
-    if !ctx.quiet {
+        let apply_ctx = crate::core::apply_engine::ApplyContext {
+            repo_root: repo_root.as_ref().unwrap_or(&cwd),
+            backup: Some(&mut backup_manager),
+            whitespace: args.whitespace,
+            context_lines: args.context_lines,
+            force: args.force,
+        };
+
+        engine.apply_with_ctx(&spec, apply_ctx).map_err(|e| {
+            let (kind, _code) = normalize_err_typed(e);
+            ApplyCliError::from(kind)
+        })?
+    } else {
+        // No backup - use legacy API
+        engine.apply(&spec).map_err(|e| {
+            let (kind, _code) = normalize_err_typed(e);
+            ApplyCliError::from(kind)
+        })?
+    };
+
+    // 11) Report results with session-based backup info
+    if args.json {
+        // JSON output (single line for machine parsing)
+        let json_output = serde_json::to_string(&report)
+            .map_err(|e| ApplyCliError::Internal(format!("JSON serialization failed: {}", e)))?;
+        println!("{}", json_output);
+    } else if !ctx.quiet {
+        // Human-friendly output
         if !report.applied_files.is_empty() {
-            println!("Applied changes to {} files:", report.applied_files.len());
-            for file in &report.applied_files {
-                println!("  • {}", file.display());
+            println!(
+                "Applied {} files with engine={:?}",
+                report.applied_files.len(),
+                report.engine_used
+            );
+            if args.verbose {
+                for file in &report.applied_files {
+                    println!("  • {}", file.display());
+                }
             }
         }
 
-        if !report.backup_paths.is_empty() {
-            println!("Created {} backup files:", report.backup_paths.len());
-            for backup in &report.backup_paths {
-                println!("  • {}", backup.display());
+        // Show session-based backup info
+        if let Some(_session_id) = &report.backup_session_id {
+            if let Some(session_dir) = report.backup_paths.first() {
+                println!("Backups: {}", session_dir.display());
+                if let Some(manifest_path) = &report.backup_manifest_path {
+                    println!("Manifest: {}", manifest_path.display());
+                }
             }
         }
     }

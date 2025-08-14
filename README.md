@@ -179,12 +179,22 @@ rup preview edit.txt         # Dedicated preview command with more options
 - Clear conflict reporting with actionable suggestions
 - Machine-readable conflict output for scripts
 
-**Robust Backup System**
+**Robust Backup System (Centralized Sessions)**
 
 ```bash
-# Automatic timestamped backups with extension preservation
-main.rs → main.rup.bak.1703123456.rs
-config.toml → config.rup.bak.1703123456.toml
+# All preimages are saved into a dedicated session directory:
+#   .rup/backups/<ISO8601>_<random>/
+# Each session contains a manifest and DONE marker for crash safety.
+
+# Example
+$ rup apply edit_spec.txt --apply --backup
+Backups: .rup/backups/2025-08-14T12-07-33Z_a1B2c3D4eF
+Manifest: .rup/backups/2025-08-14T12-07-33Z_a1B2c3D4eF/manifest.json
+
+# (Phase B2) Manage sessions
+rup backup list
+rup backup show 2025-08-14T12-07-33Z_a1B2c3D4eF
+rup backup restore 2025-08-14T12-07-33Z_a1B2c3D4eF --path src/lib.rs --dry-run
 ```
 
 **Cross-Platform Atomic Operations**

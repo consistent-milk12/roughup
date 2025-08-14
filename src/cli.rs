@@ -196,6 +196,10 @@ pub struct ApplyArgs {
     /// Whitespace handling for git apply
     #[arg(long, default_value = "nowarn")]
     pub whitespace: WhitespaceMode,
+
+    /// Output results in JSON format (single line)
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Debug, Clone, ValueEnum)]
@@ -220,7 +224,7 @@ pub enum GitMode {
     Worktree,
 }
 
-#[derive(Debug, Clone, ValueEnum)]
+#[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum WhitespaceMode {
     /// Ignore whitespace issues
     Nowarn,
@@ -276,12 +280,118 @@ pub struct CheckSyntaxArgs {
 
 #[derive(Parser)]
 pub struct BackupArgs {
-    /// Files to backup
-    pub files: Vec<PathBuf>,
+    #[command(subcommand)]
+    pub command: BackupSubcommand,
+}
 
-    /// Create backup before making changes (used with other commands)
+#[derive(Subcommand)]
+pub enum BackupSubcommand {
+    /// List backup sessions with optional filtering
+    List(BackupListArgs),
+    /// Show detailed information about a backup session
+    Show(BackupShowArgs),
+    /// Restore files from a backup session
+    Restore(BackupRestoreArgs),
+    /// Clean up old backup sessions
+    Cleanup(BackupCleanupArgs),
+}
+
+#[derive(Parser, Debug)]
+pub struct BackupListArgs {
+    /// Filter: only successful sessions
     #[arg(long)]
-    pub before_changes: bool,
+    pub successful: bool,
+
+    /// Filter by engine (internal, git, auto)
+    #[arg(long)]
+    pub engine: Option<String>,
+
+    /// Filter by relative time (e.g., "7d", "24h")
+    #[arg(long, value_name = "SPAN")]
+    pub since: Option<String>,
+
+    /// Limit result count
+    #[arg(long, default_value_t = 100)]
+    pub limit: usize,
+
+    /// Sort order (desc or asc)
+    #[arg(long, default_value = "desc")]
+    pub sort: String,
+
+    /// Machine-readable JSON output
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Parser, Debug)]
+pub struct BackupShowArgs {
+    /// Session identifier (full or short)
+    pub id: String,
+
+    /// Include file-level details
+    #[arg(long)]
+    pub verbose: bool,
+
+    /// JSON output
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Parser, Debug)]
+pub struct BackupRestoreArgs {
+    /// Session identifier
+    pub id: String,
+
+    /// Restore only one path (repo-relative)
+    #[arg(long)]
+    pub path: Option<PathBuf>,
+
+    /// Preview without writing
+    #[arg(long)]
+    pub dry_run: bool,
+
+    /// Show diff for single-file restore
+    #[arg(long)]
+    pub show_diff: bool,
+
+    /// Overwrite conflicting files
+    #[arg(long)]
+    pub force: bool,
+
+    /// Verify checksums (true by default)
+    #[arg(long, default_value_t = true)]
+    pub verify_checksum: bool,
+
+    /// Backup current files before overwrite
+    #[arg(long, default_value_t = true)]
+    pub backup_current: bool,
+
+    /// JSON output
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Parser, Debug)]
+pub struct BackupCleanupArgs {
+    /// Remove sessions older than this span (e.g., "7d", "24h")
+    #[arg(long)]
+    pub older_than: Option<String>,
+
+    /// Keep only the newest N sessions
+    #[arg(long)]
+    pub keep_latest: Option<usize>,
+
+    /// Simulate actions without deleting
+    #[arg(long)]
+    pub dry_run: bool,
+
+    /// Non-interactive confirmation
+    #[arg(long)]
+    pub yes: bool,
+
+    /// JSON summary output
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Parser)]
