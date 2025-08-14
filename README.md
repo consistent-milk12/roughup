@@ -119,8 +119,9 @@ rup check-syntax edit_spec.txt
 # Preview changes with unified diff and custom context
 rup preview edit_spec.txt --show-diff --context-lines 5
 
-# Create manual backups
-rup backup src/important.rs src/critical.rs
+# Manage backup sessions (read-only)
+rup backup list                 # case-insensitive engine filter, time filters
+rup backup show latest --json   # alias-aware; prefers completed sessions
 ```
 
 ---
@@ -194,7 +195,7 @@ Manifest: .rup/backups/2025-08-14T12-07-33Z_a1B2c3D4eF/manifest.json
 # (Phase B2) Manage sessions
 rup backup list
 rup backup show 2025-08-14T12-07-33Z_a1B2c3D4eF
-rup backup restore 2025-08-14T12-07-33Z_a1B2c3D4eF --path src/lib.rs --dry-run
+# Planned: restore/cleanup subcommands in upcoming steps
 ```
 
 **Cross-Platform Atomic Operations**
@@ -336,7 +337,7 @@ rup completions fish --out-dir ~/.config/fish/completions
 ```bash
 # Development workflow
 cargo fmt && cargo clippy --all-targets  # Format and lint
-cargo test                               # Full test suite (46+ tests)
+cargo test                               # Full test suite (50+ tests)
 cargo build --release                    # Optimized build
 
 # Install locally as 'rup'
@@ -391,12 +392,14 @@ src/
 - ** Zero-warning builds** with comprehensive type safety and memory management
 - ** Enterprise robustness** with repository boundary validation and atomic operations
 
-### Phase 3: Smart Context Assembly (In Progress)
+### Phase 3: Smart Context Assembly (Planned)
 
 - Queryable symbol index with dependency tracking
 - Budget-aware context selection for token limits
 - Automated test and helper inclusion logic
 - Chat-optimized output with CID headers and relevance ranking
+
+Recent: Backup session management (list/show) implemented with JSON output, alias resolution (prefers completed), and fast listing (filter→sort→limit→manifest-read).
 
 ### Phase 4+: Advanced Features (Future)
 

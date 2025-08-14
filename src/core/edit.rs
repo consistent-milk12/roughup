@@ -10,8 +10,14 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use crate::cli::{AppContext, ApplyArgs, BackupArgs, CheckSyntaxArgs, PreviewArgs};
+use crate::cli::{
+    AppContext, ApplyArgs, BackupArgs, BackupListArgs, BackupShowArgs, BackupSubcommand,
+    CheckSyntaxArgs, PreviewArgs,
+};
 use crate::core::apply_engine::create_engine;
+use crate::core::backup_ops::{
+    ListRequest, SessionInfo, ShowRequest, list_sessions_filtered, show_session,
+};
 
 /// Content ID for change detection (xxh64 hash)
 pub type ContentId = String;
@@ -1090,12 +1096,13 @@ pub fn apply_run(args: ApplyArgs, ctx: &AppContext) -> Result<()> {
         }
 
         // Show session-based backup info
-        if let Some(_session_id) = &report.backup_session_id {
-            if let Some(session_dir) = report.backup_paths.first() {
-                println!("Backups: {}", session_dir.display());
-                if let Some(manifest_path) = &report.backup_manifest_path {
-                    println!("Manifest: {}", manifest_path.display());
-                }
+        if let Some(_session_id) = &report.backup_session_id
+            && let Some(session_dir) = report.backup_paths.first()
+        {
+            println!("Backups: {}", session_dir.display());
+
+            if let Some(manifest_path) = &report.backup_manifest_path {
+                println!("Manifest: {}", manifest_path.display());
             }
         }
     }
@@ -1242,31 +1249,105 @@ pub fn check_syntax_run(args: CheckSyntaxArgs, ctx: &AppContext) -> Result<()> {
     Ok(())
 }
 
-/// Create backup files
+/// Backup management subcommands (Phase B2 - read-only for now)
 pub fn backup_run(args: BackupArgs, ctx: &AppContext) -> Result<()> {
-    let engine = EditEngine::new();
-    let mut backup_paths = Vec::new();
+    // Use current working directory as repo root for backup store
+    let repo_root = std::env::current_dir()?;
 
-    for file_path in &args.files {
-        if !file_path.exists() {
-            eprintln!("File not found: {}", file_path.display());
-            continue;
+    match args.command {
+        BackupSubcommand::List(list_args) => backup_list(&repo_root, &list_args, ctx),
+        BackupSubcommand::Show(show_args) => backup_show(&repo_root, &show_args, ctx),
+        BackupSubcommand::Restore(_restore_args) => {
+            eprintln!("'rup backup restore' is not implemented yet.");
+            Ok(())
         }
-
-        match engine.create_backup(file_path) {
-            Ok(backup_path) => {
-                backup_paths.push(backup_path);
-            }
-            Err(e) => {
-                eprintln!("Failed to backup {}: {}", file_path.display(), e);
-            }
+        BackupSubcommand::Cleanup(_cleanup_args) => {
+            eprintln!("'rup backup cleanup' is not implemented yet.");
+            Ok(())
         }
     }
+}
 
-    if !ctx.quiet && !backup_paths.is_empty() {
-        println!("Created {} backup files:", backup_paths.len());
-        for backup in &backup_paths {
-            println!("  • {}", backup.display());
+fn backup_list(repo_root: &Path, a: &BackupListArgs, ctx: &AppContext) -> Result<()> {
+    let sort_desc = !a.sort.eq_ignore_ascii_case("asc");
+    let req = ListRequest {
+        successful: a.successful,
+        engine: a.engine.clone(),
+        since: a.since.clone(),
+        limit: a.limit,
+        sort_desc,
+    };
+
+    let sessions = list_sessions_filtered(repo_root, req)?;
+
+    if a.json {
+        println!("{}", serde_json::to_string_pretty(&sessions)?);
+        return Ok(());
+    }
+
+    if sessions.is_empty() {
+        if !ctx.quiet {
+            println!("No backup sessions found.");
+        }
+        return Ok(());
+    }
+
+    for s in sessions {
+        print_session_line(&s);
+    }
+    Ok(())
+}
+
+fn print_session_line(s: &SessionInfo) {
+    let status = if s.success { "success" } else { "failed" };
+    let samples = if s.sample_paths.is_empty() {
+        String::new()
+    } else {
+        format!("  [{}]", s.sample_paths.join(", "))
+    };
+    println!(
+        "{}  {}  {}  files={}  {}{}",
+        s.timestamp, s.id, s.engine, s.files, status, samples
+    );
+}
+
+fn backup_show(repo_root: &Path, a: &BackupShowArgs, ctx: &AppContext) -> Result<()> {
+    let resp = show_session(
+        repo_root,
+        ShowRequest {
+            id: a.id.clone(),
+            verbose: a.verbose,
+        },
+    )?;
+
+    if a.json {
+        println!("{}", serde_json::to_string_pretty(&resp)?);
+        return Ok(());
+    }
+
+    let m = &resp.manifest;
+    println!("id: {}", m.id);
+    println!("timestamp: {}", m.timestamp);
+    println!("engine: {}", m.engine);
+    println!("success: {}", m.success);
+    println!("files: {}", m.files.len());
+    println!("session_path: {}", resp.session_path.display());
+    if let Some(sz) = resp.total_size {
+        println!("payload_size_bytes: {}", sz);
+    }
+
+    if a.verbose {
+        println!("file entries:");
+        for f in &m.files {
+            println!("  - {} ({} bytes)", f.rel_path.display(), f.size_bytes);
+        }
+    } else if !ctx.quiet {
+        // show up to 3 samples for quick glance
+        for f in m.files.iter().take(3) {
+            println!("  - {}", f.rel_path.display());
+        }
+        if m.files.len() > 3 {
+            println!("  … and {} more", m.files.len() - 3);
         }
     }
 

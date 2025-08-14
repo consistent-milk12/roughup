@@ -6,13 +6,11 @@
 
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Duration, Utc};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::core::backup::{
-    SessionIndexEntry, SessionManifest, list_sessions, read_session_manifest,
-};
+use crate::core::backup::{SessionManifest, list_sessions, read_session_manifest};
 
 /// Session ID resolution result
 #[derive(Debug)]

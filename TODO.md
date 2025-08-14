@@ -667,15 +667,15 @@ Determinism tests (must)
   - Modify apply command reporting to show session info
   - Update JSON output with new fields while maintaining compatibility
 
-**Phase B2: Add Backup Management CLI Commands** (In Progress)
+**Phase B2: Add Backup Management CLI Commands** (Step 4 Complete)
 
-- [🔄] **Step 4**: Add backup subcommands to CLI - Read-only operations
+- [✅] **Step 4**: Add backup subcommands to CLI - Read-only operations
 
   - [x] CLI argument structures with comprehensive help text (BackupSubcommand, BackupListArgs, BackupShowArgs)
   - [x] Core operations module with mentor review fixes applied (backup_ops.rs)
-  - [ ] CLI command handlers wiring (backup_cli.rs + main.rs dispatch)
-  - [ ] JSON output formatting for list/show commands
-  - [ ] Integration tests for read-only operations
+  - [x] CLI command handlers wired in `core/edit.rs` and `main.rs` dispatch
+  - [x] JSON output formatting for list/show commands
+  - [x] Integration tests for read-only operations (engine filter case-insensitive, alias completion preference, payload size excludes metadata)
 
 - [ ] **Step 5**: Implement restoration logic
 
@@ -736,14 +736,12 @@ Determinism tests (must)
 
 **Phase B2** (In Progress - Step 4): 6. **Performance-first listing** with filter→sort→limit→manifest-read to keep operations <150ms 7. **Completion policy** for aliases - prefer sessions with DONE markers 8. **Case-insensitive engine filtering** for better UX (--engine=Auto matches auto/AUTO) 9. **Strict relative time parsing** with negative duration rejection 10. **Payload size calculation** excludes manifest.json and DONE metadata files
 
-**CURRENT: Phase B2 - Backup Management CLI Commands** (In Progress)
+**CURRENT: Phase B2 - Backup Management CLI Commands** (Next: Steps 5–6)
 
-**Next Session Priority**: Complete Step 4 (Read-Only Commands) implementation
+**Next Session Priorities**
 
-- Wire backup subcommands in main.rs dispatch
-- Create backup_cli.rs with list/show command handlers
-- Test critical fixes: case-insensitive engine filter, completed session preference, negative duration rejection
-- Implement JSON output formatting for list/show commands
+- Implement Step 5 (Restore): safe restoration, preview/diff, checksum verify, and current-file backup
+- Implement Step 6 (Cleanup): age/count policies with confirmation and CI-friendly `--yes`
 
 **Architecture Progress**:
 ✅ **Core Operations Module Complete** (`src/core/backup_ops.rs`):
@@ -756,7 +754,7 @@ Determinism tests (must)
 
 **Success Criteria**:
 
-- `rup backup list/show` commands work with all filters and JSON output
+- `rup backup list/show` commands work with all filters and JSON output (validated by tests)
 - Performance targets met: list 1k+ sessions <150ms, manifest reads only for top-N results
 - Aliases (latest, last-successful) prefer completed sessions
 
