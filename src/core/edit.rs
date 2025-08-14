@@ -11,12 +11,13 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use crate::cli::{
-    AppContext, ApplyArgs, BackupArgs, BackupListArgs, BackupShowArgs, BackupSubcommand,
-    CheckSyntaxArgs, PreviewArgs,
+    AppContext, ApplyArgs, BackupArgs, BackupCleanupArgs, BackupListArgs, BackupRestoreArgs,
+    BackupShowArgs, BackupSubcommand, CheckSyntaxArgs, PreviewArgs,
 };
 use crate::core::apply_engine::create_engine;
 use crate::core::backup_ops::{
-    ListRequest, SessionInfo, ShowRequest, list_sessions_filtered, show_session,
+    CleanupRequest, ListRequest, RestoreRequest, SessionInfo, ShowRequest, cleanup_sessions,
+    list_sessions_filtered, restore_session, show_session,
 };
 
 /// Content ID for change detection (xxh64 hash)
@@ -1257,14 +1258,8 @@ pub fn backup_run(args: BackupArgs, ctx: &AppContext) -> Result<()> {
     match args.command {
         BackupSubcommand::List(list_args) => backup_list(&repo_root, &list_args, ctx),
         BackupSubcommand::Show(show_args) => backup_show(&repo_root, &show_args, ctx),
-        BackupSubcommand::Restore(_restore_args) => {
-            eprintln!("'rup backup restore' is not implemented yet.");
-            Ok(())
-        }
-        BackupSubcommand::Cleanup(_cleanup_args) => {
-            eprintln!("'rup backup cleanup' is not implemented yet.");
-            Ok(())
-        }
+        BackupSubcommand::Restore(restore_args) => backup_restore(&repo_root, &restore_args, ctx),
+        BackupSubcommand::Cleanup(cleanup_args) => backup_cleanup(&repo_root, &cleanup_args, ctx),
     }
 }
 
@@ -1348,6 +1343,125 @@ fn backup_show(repo_root: &Path, a: &BackupShowArgs, ctx: &AppContext) -> Result
         }
         if m.files.len() > 3 {
             println!("  … and {} more", m.files.len() - 3);
+        }
+    }
+
+    Ok(())
+}
+
+fn backup_restore(repo_root: &Path, a: &BackupRestoreArgs, ctx: &AppContext) -> Result<()> {
+    let is_dry_run = a.dry_run || ctx.dry_run; // Honor global dry-run flag
+    let req = RestoreRequest {
+        session_id: a.session.clone(),
+        path: a.path.clone(),
+        dry_run: is_dry_run,
+        force: a.force,
+        show_diff: a.show_diff,
+        verify_checksum: a.verify_checksum,
+        backup_current: a.backup_current,
+    };
+
+    let result = restore_session(repo_root, req)?;
+
+    if a.json {
+        println!("{}", serde_json::to_string_pretty(&result)?);
+        return Ok(());
+    }
+
+    // Human-friendly output
+    if !ctx.quiet {
+        println!("Session: {}", result.session_id);
+    }
+
+    if is_dry_run && !ctx.quiet {
+        println!("DRY RUN - no files were modified");
+    }
+
+    // Show conflicts
+    if !result.conflicts.is_empty() {
+        if !ctx.quiet {
+            println!("Conflicts detected in {} file(s):", result.conflicts.len());
+            for conflict_path in &result.conflicts {
+                println!("  - {}", conflict_path.display());
+            }
+        }
+
+        // Show diffs if requested and available
+        if let Some(ref diffs) = result.diffs {
+            for diff in diffs {
+                println!("\nDiff for {}:", diff.path.display());
+                println!("{}", diff.unified);
+            }
+        }
+
+        if !is_dry_run {
+            println!(
+                "\nUse --force to overwrite conflicting files, or --dry-run to preview changes."
+            );
+        }
+        return Ok(());
+    }
+
+    // Show restored files
+    if !result.restored.is_empty() && !ctx.quiet {
+        println!("Restored {} file(s):", result.restored.len());
+        for restored_path in &result.restored {
+            println!("  - {}", restored_path.display());
+        }
+    }
+
+    // Show backup information if current files were backed up
+    if result.backed_up_current
+        && let Some(ref backup_session) = result.backup_session_id
+        && !ctx.quiet
+    {
+        println!("Current files backed up to session: {}", backup_session);
+    }
+
+    Ok(())
+}
+
+fn backup_cleanup(repo_root: &Path, a: &BackupCleanupArgs, ctx: &AppContext) -> Result<()> {
+    let is_dry_run = a.dry_run || ctx.dry_run; // Honor global dry-run flag
+    let req = CleanupRequest {
+        older_than: a.older_than.clone(),
+        keep_latest: a.keep_latest,
+        include_incomplete: a.include_incomplete,
+        dry_run: is_dry_run,
+    };
+
+    let result = cleanup_sessions(repo_root, req)?;
+
+    if a.json {
+        println!("{}", serde_json::to_string_pretty(&result)?);
+        return Ok(());
+    }
+
+    // Human-friendly output
+    if is_dry_run && !ctx.quiet {
+        println!("DRY RUN - no sessions were deleted");
+    }
+
+    if result.sessions_removed.is_empty() {
+        if !ctx.quiet {
+            println!("No sessions matched cleanup criteria");
+        }
+        return Ok(());
+    }
+
+    if !ctx.quiet {
+        let action = if is_dry_run {
+            "Would remove"
+        } else {
+            "Removed"
+        };
+        println!("{} {} session(s):", action, result.sessions_removed.len());
+        for session_id in &result.sessions_removed {
+            println!("  - {}", session_id);
+        }
+
+        if result.bytes_freed > 0 {
+            println!("Space freed: {} bytes", result.bytes_freed);
         }
     }
 

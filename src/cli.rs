@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 /// Shared application context for global flags
@@ -288,10 +288,13 @@ pub struct BackupArgs {
 pub enum BackupSubcommand {
     /// List backup sessions with optional filtering
     List(BackupListArgs),
+
     /// Show detailed information about a backup session
     Show(BackupShowArgs),
+
     /// Restore files from a backup session
     Restore(BackupRestoreArgs),
+
     /// Clean up old backup sessions
     Cleanup(BackupCleanupArgs),
 }
@@ -337,63 +340,62 @@ pub struct BackupShowArgs {
     pub json: bool,
 }
 
-#[derive(Parser, Debug)]
+#[derive(Args, Debug)]
 pub struct BackupRestoreArgs {
-    /// Session identifier
-    pub id: String,
+    /// Session ID or alias (e.g., 'latest')
+    pub session: String,
 
-    /// Restore only one path (repo-relative)
+    /// Restore only this repo-relative path from the session
     #[arg(long)]
     pub path: Option<PathBuf>,
 
-    /// Preview without writing
+    /// Do not write files; show plan and (optional) diff
     #[arg(long)]
     pub dry_run: bool,
 
-    /// Show diff for single-file restore
-    #[arg(long)]
-    pub show_diff: bool,
-
-    /// Overwrite conflicting files
+    /// Overwrite even if current content differs
     #[arg(long)]
     pub force: bool,
 
-    /// Verify checksums (true by default)
-    #[arg(long, default_value_t = true)]
+    /// Show unified diff for single-file restores
+    #[arg(long)]
+    pub show_diff: bool,
+
+    /// Validate backed-up content against manifest checksums
+    #[arg(long)]
     pub verify_checksum: bool,
 
-    /// Backup current files before overwrite
-    #[arg(long, default_value_t = true)]
+    /// Back up current files before overwriting
+    #[arg(long)]
     pub backup_current: bool,
 
-    /// JSON output
+    /// Emit JSON result instead of human text
     #[arg(long)]
     pub json: bool,
 }
 
-#[derive(Parser, Debug)]
+#[derive(Args, Debug)]
 pub struct BackupCleanupArgs {
-    /// Remove sessions older than this span (e.g., "7d", "24h")
+    /// RFC3339 or relative span: 7d, 24h, 90m, 45s, 2w
     #[arg(long)]
     pub older_than: Option<String>,
 
-    /// Keep only the newest N sessions
+    /// Keep N newest sessions; remove the rest
     #[arg(long)]
     pub keep_latest: Option<usize>,
 
-    /// Simulate actions without deleting
+    /// Include sessions without DONE marker
+    #[arg(long)]
+    pub include_incomplete: bool,
+
+    /// Simulate without deleting anything
     #[arg(long)]
     pub dry_run: bool,
 
-    /// Non-interactive confirmation
-    #[arg(long)]
-    pub yes: bool,
-
-    /// JSON summary output
+    /// Emit JSON result instead of human text
     #[arg(long)]
     pub json: bool,
 }
-
 #[derive(Parser)]
 pub struct InitArgs {
     /// Directory to initialize config in

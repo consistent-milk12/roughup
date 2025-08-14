@@ -1,16 +1,65 @@
+//! # Backup Session Management Operations
+//!
+//! This module provides high-level operations for managing backup sessions, including listing,
+//! showing details, restoring files, and cleaning up old sessions. It implements the Phase B2
+//! backup management functionality with safe defaults and comprehensive error handling.
+//!
+//! ## Features
+//!
+//! - **Session Listing:** Filter and list backup sessions by success status, engine type, and time bounds.
+//! - **Session Details:** Show detailed information about a specific session, including manifest and total size.
+//! - **Session Restoration:** Restore files from a backup session, with options for dry-run, force overwrite, path filtering, checksum verification, and unified diff reporting for conflicts.
+//! - **Session Cleanup:** Remove old or incomplete sessions based on age or count, with dry-run support and error reporting.
+//! - **Session ID Resolution:** Robust resolution of session IDs, supporting full IDs, short suffixes, date prefixes, and aliases (`latest`, `last-successful`).
+//! - **Unified Diff Generation:** Generate unified diffs between current files and backup versions for conflict analysis.
+//! - **Checksum Verification:** Stream-based Blake3 checksum verification for backup payload integrity.
+//!
+//! ## Key Types
+//!
+//! - `SessionIdResolution`: Enum representing the result of session ID resolution (single, multiple, not found).
+//! - `SessionInfo`: Concise session info for listing.
+//! - `ListRequest`: Request structure for listing sessions.
+//! - `ShowRequest`, `ShowResponse`: Structures for showing session details.
+//! - `RestoreRequest`, `RestoreResult`: Structures for restoring files from a session.
+//! - `CleanupRequest`, `CleanupResult`: Structures for cleaning up sessions.
+//! - `FileDiff`: Structure representing a unified diff for a file.
+//!
+//! ## Helper Functions
+//!
+//! - `select_targets`: Selects files from a session manifest, optionally filtering by path.
+//! - `build_diffs`: Builds unified diffs between current repo files and backup versions.
+//! - `normalize_repo_rel`: Normalizes and validates repo-relative paths.
+//! - `parse_time_bound`: Parses time bounds for filtering and cleanup (supports RFC3339 and relative specs like "7d", "24h").
+//! - `stream_blake3`: Computes streaming Blake3 checksums for files.
+//!
+//! ## Error Handling
+//!
+//! All operations use robust error handling via the `anyhow` crate, providing context for failures.
+//!
+//! ## Testing
+//!
+//! Includes unit tests for time bound parsing and session ID resolution logic.
+//!
+//! ## Usage
+//!
+//! Import and use the provided functions to manage backup sessions in a repository.
+//!
 //! Backup session management operations
 //!
 //! Provides high-level operations for listing, showing, restoring, and cleaning up
 //! backup sessions. This module implements the Phase B2 backup management functionality
 //! with safe defaults and comprehensive error handling.
-
 use anyhow::{Context, Result, bail};
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use serde::Serialize;
-use std::fs;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::{fs, path::Component};
 
-use crate::core::backup::{SessionManifest, list_sessions, read_session_manifest};
+use crate::core::backup::{
+    BackupManager, FileBackupMeta, SessionIndexEntry, SessionManifest, list_sessions,
+    read_session_manifest,
+};
 
 /// Session ID resolution result
 #[derive(Debug)]
@@ -54,55 +103,108 @@ pub struct ShowRequest {
 /// Response for show command
 #[derive(Debug, Serialize)]
 pub struct ShowResponse {
+    /// The manifest containing metadata and file list for the session
     pub manifest: SessionManifest,
+
+    /// Filesystem path to the session's backup directory
     pub session_path: PathBuf,
+
+    /// Total size of the session's backup payload (in bytes), if verbose
     pub total_size: Option<u64>,
 }
 
-/// Request structure for restore operations
+/// Request for restoring from a session.
 #[derive(Debug)]
 pub struct RestoreRequest {
-    pub session_id: String,
-    pub path: Option<PathBuf>,
-    pub dry_run: bool,
-    pub show_diff: bool,
-    pub force: bool,
-    pub verify_checksum: bool,
+    /// If true, back up current files before restoring
     pub backup_current: bool,
+
+    /// If true, only plan the restore (do not write files)
+    pub dry_run: bool,
+
+    /// If true, overwrite files even if content mismatches
+    pub force: bool,
+
+    /// Optional repo-relative path filter to restore only specific file(s)
+    pub path: Option<PathBuf>,
+
+    /// Session ID or alias ('latest', 'last-successful') to restore from
+    pub session_id: String,
+
+    /// If true, emit unified diffs for conflicting files
+    pub show_diff: bool,
+
+    /// If true, verify checksums of backup payloads before restoring
+    pub verify_checksum: bool,
 }
 
-/// Result of restore operation
+/// Unified diff for a file.
+#[derive(Debug, Serialize)]
+pub struct FileDiff {
+    /// The repo-relative path of the file being diffed
+    pub path: PathBuf,
+
+    /// The unified diff output as a string
+    pub unified: String,
+}
+
+/// Result of a restore operation.
 #[derive(Debug, Serialize)]
 pub struct RestoreResult {
-    pub session_id: String,
-    pub restored: Vec<PathBuf>,
-    pub conflicts: Vec<PathBuf>,
+    /// Indicates if current files were backed up before restoring
     pub backed_up_current: bool,
+
+    /// The session ID of the backup created for current files, if any
     pub backup_session_id: Option<String>,
+
+    /// List of files that had conflicts during restore
+    pub conflicts: Vec<PathBuf>,
+
+    /// Optional unified diffs for conflicting files
+    pub diffs: Option<Vec<FileDiff>>,
+
+    /// List of files that were restored
+    pub restored: Vec<PathBuf>,
+
+    /// The session ID from which files were restored
+    pub session_id: String,
 }
 
-/// Request structure for cleanup operations
+/// Request for cleanup.
 #[derive(Debug)]
 pub struct CleanupRequest {
-    pub older_than: Option<String>,
-    pub keep_latest: Option<usize>,
+    /// If true, only plan the cleanup (do not delete sessions)
     pub dry_run: bool,
+
+    /// If true, include sessions that do not have a DONE marker (incomplete)
     pub include_incomplete: bool,
+
+    /// Number of newest sessions to keep (if specified)
+    pub keep_latest: Option<usize>,
+
+    /// Remove sessions older than this RFC3339 or relative spec (e.g., "7d", "24h")
+    pub older_than: Option<String>,
 }
 
-/// Result of cleanup operation
+/// Result of cleanup.
 #[derive(Debug, Serialize)]
 pub struct CleanupResult {
-    pub sessions_removed: Vec<String>,
+    /// Total bytes freed by cleanup
     pub bytes_freed: u64,
+
+    /// Errors encountered during cleanup
     pub errors: Vec<String>,
+
+    /// List of session IDs that were removed
+    pub sessions_removed: Vec<String>,
 }
 
 /// List sessions with filters, minimizing manifest IO
+/// Filters include success status, engine type, and time bounds.
 pub fn list_sessions_filtered(repo_root: &Path, req: ListRequest) -> Result<Vec<SessionInfo>> {
     // Parse "since" once
     let since_time = if let Some(ref s) = req.since {
-        Some(parse_relative_time(s)?)
+        Some(parse_time_bound(s)?)
     } else {
         None
     };
@@ -139,9 +241,11 @@ pub fn list_sessions_filtered(repo_root: &Path, req: ListRequest) -> Result<Vec<
         let ap = DateTime::parse_from_rfc3339(&a.timestamp)
             .ok()
             .map(|x| x.with_timezone(&Utc));
+
         let bp = DateTime::parse_from_rfc3339(&b.timestamp)
             .ok()
             .map(|x| x.with_timezone(&Utc));
+
         if req.sort_desc {
             bp.cmp(&ap).then_with(|| b.timestamp.cmp(&a.timestamp))
         } else {
@@ -163,8 +267,9 @@ pub fn list_sessions_filtered(repo_root: &Path, req: ListRequest) -> Result<Vec<
                 .files
                 .iter()
                 .take(3)
-                .map(|f| f.rel_path.display().to_string())
+                .map(|f| f.original_path.display().to_string())
                 .collect(),
+
             Err(_) => Vec::new(),
         };
 
@@ -204,7 +309,10 @@ pub fn show_session(repo_root: &Path, req: ShowRequest) -> Result<ShowResponse> 
 /// Resolve session ID (supports full, short, and aliases)
 pub fn resolve_session_id(repo_root: &Path, query: &str) -> Result<String> {
     match resolve_session_id_internal(repo_root, query)? {
+        // If a single session is found, return its ID
         SessionIdResolution::Single(id) => Ok(id),
+
+        // If multiple sessions match, return an error with the list of matches
         SessionIdResolution::Multiple(matches) => {
             bail!(
                 "Ambiguous session ID '{}'. Matches: {}",
@@ -212,6 +320,8 @@ pub fn resolve_session_id(repo_root: &Path, query: &str) -> Result<String> {
                 matches.join(", ")
             );
         }
+
+        // If no session matches, return an error
         SessionIdResolution::NotFound => {
             bail!("No session found matching '{}'", query);
         }
@@ -256,6 +366,7 @@ fn resolve_session_id_internal(repo_root: &Path, query: &str) -> Result<SessionI
                 None => SessionIdResolution::NotFound,
             });
         }
+
         // last-successful: newest completed AND success=true
         "last-successful" => {
             let mut cands: Vec<_> = entries
@@ -263,6 +374,7 @@ fn resolve_session_id_internal(repo_root: &Path, query: &str) -> Result<SessionI
                 .filter(|(id, _, success, _)| *success && is_complete(id))
                 .collect();
             cands.sort_by(|a, b| b.3.cmp(&a.3).then_with(|| b.1.cmp(&a.1)));
+
             return Ok(match cands.first() {
                 Some((id, ..)) => SessionIdResolution::Single(id.clone()),
                 None => SessionIdResolution::NotFound,
@@ -279,10 +391,12 @@ fn resolve_session_id_internal(repo_root: &Path, query: &str) -> Result<SessionI
         if id == query {
             return Ok(SessionIdResolution::Single(id.clone()));
         }
+
         // Short ID (require a minimal length to reduce noise)
         if query.len() >= 8 && id.ends_with(query) {
             matches.push((id.clone(), *parsed, ts.clone()));
         }
+
         // Date prefix like "2025-08-14"
         if query.contains('-') && id.starts_with(query) {
             matches.push((id.clone(), *parsed, ts.clone()));
@@ -310,44 +424,6 @@ fn session_is_complete(repo_root: &Path, session_id: &str) -> Result<bool> {
     Ok(done_path.exists())
 }
 
-/// Parse relative time specifications like "7d", "24h"
-fn parse_relative_time(time_str: &str) -> Result<DateTime<Utc>> {
-    // Trim and validate
-    let time_str = time_str.trim();
-    if time_str.is_empty() {
-        bail!("Empty time specification");
-    }
-
-    // Split number and unit
-    let (number_str, unit) = match time_str.chars().last() {
-        Some('d' | 'h' | 'm' | 's') => (
-            &time_str[..time_str.len() - 1],
-            time_str.chars().last().unwrap(),
-        ),
-        _ => bail!("Invalid time unit in '{}'. Use d, h, m, or s", time_str),
-    };
-
-    // Parse and reject negatives
-    let number: i64 = number_str
-        .parse()
-        .with_context(|| format!("Invalid number '{}' in time specification", number_str))?;
-    if number < 0 {
-        bail!("Negative durations are not allowed: '{}'", time_str);
-    }
-
-    // Map to chrono::Duration
-    let duration = match unit {
-        'd' => Duration::days(number),
-        'h' => Duration::hours(number),
-        'm' => Duration::minutes(number),
-        's' => Duration::seconds(number),
-        _ => unreachable!(),
-    };
-
-    // Compute bound
-    Ok(Utc::now() - duration)
-}
-
 /// Compute size of backed-up payload (exclude manifest and DONE)
 fn calculate_session_size(session_path: &Path) -> Result<u64> {
     // Accumulator
@@ -368,6 +444,7 @@ fn calculate_session_size(session_path: &Path) -> Result<u64> {
 
             // Skip metadata files
             let fname = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+
             if fname == "manifest.json" || fname == "DONE" {
                 continue;
             }
@@ -375,6 +452,7 @@ fn calculate_session_size(session_path: &Path) -> Result<u64> {
             // Sum file size
             *total += md.len();
         }
+
         Ok(())
     }
 
@@ -386,32 +464,687 @@ fn calculate_session_size(session_path: &Path) -> Result<u64> {
     Ok(total_size)
 }
 
+/// Restore files from a session.
+pub fn restore_session(repo_root: &Path, req: RestoreRequest) -> Result<RestoreResult> {
+    let session_id = resolve_session_id(repo_root, &req.session_id)?;
+    let manifest = read_session_manifest(repo_root, &session_id)?;
+    let session_dir = repo_root.join(".rup").join("backups").join(&session_id);
+
+    let targets =
+        select_targets(&manifest, req.path.as_deref()).context("no matching file(s) in session")?;
+
+    if req.verify_checksum {
+        for f in &targets {
+            if let Some(expected) = &f.checksum {
+                let p = session_dir.join(&f.rel_path);
+                let actual = stream_blake3(&p)?;
+                if &actual != expected {
+                    bail!("checksum mismatch for {}", f.original_path.display());
+                }
+            }
+        }
+    }
+
+    // Detect conflicts (current bytes != backup bytes).
+    let mut conflicts = Vec::<PathBuf>::new();
+    let mut writes = Vec::<(PathBuf, Vec<u8>)>::new();
+
+    for f in &targets {
+        let dst = repo_root.join(&f.original_path);
+        let backup_bytes = fs::read(session_dir.join(&f.rel_path))
+            .with_context(|| format!("read backup payload: {}", f.rel_path.display()))?;
+
+        if dst.exists() {
+            let cur = fs::read(&dst).with_context(|| format!("read current: {}", dst.display()))?;
+            if cur != backup_bytes && !req.force {
+                conflicts.push(f.original_path.clone());
+                continue;
+            }
+        }
+        writes.push((f.original_path.clone(), backup_bytes));
+    }
+
+    // On conflicts without --force, report plan and optional diff(s).
+    if !conflicts.is_empty() && !req.force {
+        let diffs = if req.show_diff {
+            Some(build_diffs(repo_root, &session_dir, &targets)?)
+        } else {
+            None
+        };
+        return Ok(RestoreResult {
+            session_id,
+            restored: Vec::new(),
+            conflicts,
+            backed_up_current: false,
+            backup_session_id: None,
+            diffs,
+        });
+    }
+
+    // Optionally back up current files before overwriting.
+    let mut backed_up_current = false;
+    let mut backup_session_id = None;
+    if req.backup_current && !req.dry_run {
+        let mut mgr = BackupManager::begin(repo_root, "restore")?;
+        for (rel, _) in &writes {
+            if repo_root.join(rel).exists() {
+                mgr.backup_file(rel)?;
+            }
+        }
+        mgr.finalize(true)?;
+        backed_up_current = true;
+        backup_session_id = Some(mgr.session_id().to_string());
+    }
+
+    // Apply or simulate writes.
+    let mut restored = Vec::<PathBuf>::new();
+
+    if req.dry_run {
+        restored.extend(writes.iter().map(|(p, _)| p.clone()));
+    } else {
+        for (rel, bytes) in writes {
+            let dst = repo_root.join(&rel);
+
+            if let Some(parent) = dst.parent() {
+                fs::create_dir_all(parent)?;
+            }
+
+            fs::write(&dst, &bytes)
+                .with_context(|| format!("write restored file: {}", dst.display()))?;
+
+            restored.push(rel);
+        }
+    }
+
+    // Optional diffs after restore plan; use current vs backup.
+    let diffs = if req.show_diff {
+        Some(build_diffs(repo_root, &session_dir, &targets)?)
+    } else {
+        None
+    };
+
+    Ok(RestoreResult {
+        session_id,
+        restored,
+        conflicts: Vec::new(),
+        backed_up_current,
+        backup_session_id,
+        diffs,
+    })
+}
+
+/// Cleanup sessions by age and/or keep-latest.
+pub fn cleanup_sessions(repo_root: &Path, req: CleanupRequest) -> Result<CleanupResult> {
+    if req.older_than.is_none() && req.keep_latest.is_none() {
+        bail!("specify --older-than and/or --keep-latest");
+    }
+
+    let base = repo_root.join(".rup").join("backups");
+    if !base.exists() {
+        return Ok(CleanupResult {
+            sessions_removed: vec![],
+            bytes_freed: 0,
+            errors: vec![],
+        });
+    }
+
+    // Enumerate sessions on disk for ground truth.
+    let mut rows = Vec::<(String, PathBuf, DateTime<Utc>, bool)>::new();
+    for ent in fs::read_dir(&base)? {
+        let ent = ent?;
+        if !ent.file_type()?.is_dir() {
+            continue;
+        }
+        if ent.file_name().to_string_lossy() == "tmp" {
+            continue;
+        }
+        let id = ent.file_name().to_string_lossy().to_string();
+        let p = ent.path();
+        let done = p.join("DONE").exists();
+        if !req.include_incomplete && !done {
+            continue;
+        }
+
+        let ts = read_manifest_ts(&p)
+            .or_else(|| dir_mtime_fallback(&ent))
+            .unwrap_or_else(Utc::now);
+        rows.push((id, p, ts, done));
+    }
+
+    // Newest first, deterministic by id.
+    rows.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| b.0.cmp(&a.0)));
+
+    // Build deletion set by rules.
+    let mut to_delete = Vec::<(String, PathBuf)>::new();
+
+    if let Some(spec) = &req.older_than {
+        let cutoff = parse_time_bound(spec)?;
+        for (id, p, ts, _) in &rows {
+            if *ts < cutoff {
+                to_delete.push((id.clone(), p.clone()));
+            }
+        }
+    }
+
+    if let Some(keep) = req.keep_latest
+        && rows.len() > keep
+    {
+        for (id, p, _, _) in rows.iter().skip(keep) {
+            if !to_delete.iter().any(|(x, _)| x == id) {
+                to_delete.push((id.clone(), p.clone()));
+            }
+        }
+    }
+
+    // Fix #6: Proper deduplication using HashSet to handle non-adjacent duplicates
+    use std::collections::HashSet;
+    let mut seen = HashSet::new();
+    to_delete.retain(|(id, _)| seen.insert(id.clone()));
+
+    let mut bytes = 0u64;
+    for (_, p) in &to_delete {
+        bytes = bytes.saturating_add(dir_size(p).unwrap_or(0));
+    }
+
+    let mut removed = Vec::<String>::new();
+    let mut errors = Vec::<String>::new();
+
+    if req.dry_run {
+        removed.extend(to_delete.iter().map(|(id, _)| id.clone()));
+    } else {
+        for (id, p) in &to_delete {
+            match fs::remove_dir_all(p) {
+                Ok(_) => removed.push(id.clone()),
+                Err(e) => errors.push(format!("{}: {}", id, e)),
+            }
+        }
+        // Optional: rebuild index for consistency.
+        if let Err(e) = rebuild_index(repo_root) {
+            errors.push(format!("index rebuild: {e}"));
+        }
+    }
+
+    Ok(CleanupResult {
+        sessions_removed: removed,
+        bytes_freed: bytes,
+        errors,
+    })
+}
+
+/* ---------- helpers ---------- */
+
+/// Select target files from a session manifest, optionally filtering by a repo-relative path.
+/// Returns a vector of matching FileBackupMeta entries.
+/// If a filter is provided, only files matching the normalized path are returned.
+/// Errors if the filter does not match any file in the session.
+fn select_targets(manifest: &SessionManifest, filt: Option<&Path>) -> Result<Vec<FileBackupMeta>> {
+    if let Some(p) = filt {
+        // Normalize the filter path to ensure it's repo-relative and safe
+        let want = normalize_repo_rel(p)?;
+        let mut out = Vec::new();
+
+        // Find files in the manifest that match the normalized filter path
+        for f in &manifest.files {
+            if normalize_repo_rel(&f.original_path)? == want {
+                out.push(f.clone());
+            }
+        }
+
+        // Error if no files matched the filter
+        if out.is_empty() {
+            bail!("file not present in session: {}", want.display());
+        }
+
+        Ok(out)
+    } else {
+        // No filter: return all files in the session
+        Ok(manifest.files.clone())
+    }
+}
+
+/// Build unified diffs between current repo files and their backup versions in a session.
+///
+/// For each target file, reads the current file from the repository and the backup file
+/// from the session directory. If either file is missing, treats its contents as empty.
+/// Returns a vector of `FileDiff` containing the path and unified diff output.
+///
+/// # Arguments
+/// * `repo_root` - Path to the repository root.
+/// * `session_dir` - Path to the session backup directory.
+/// * `targets` - List of files to diff, as `FileBackupMeta`.
+///
+/// # Errors
+/// Returns an error only if allocation fails (very rare), since file reads use `unwrap_or_default`.
+fn build_diffs(
+    repo_root: &Path,
+    session_dir: &Path,
+    targets: &[FileBackupMeta],
+) -> Result<Vec<FileDiff>> {
+    let mut out = Vec::new();
+    for t in targets {
+        // Fix #10: Handle binary files by checking UTF-8 validity
+        let cur_bytes = fs::read(repo_root.join(&t.original_path)).unwrap_or_default();
+        let bak_bytes = fs::read(session_dir.join(&t.rel_path)).unwrap_or_default();
+
+        let (cur, bak) = match (
+            std::str::from_utf8(&cur_bytes),
+            std::str::from_utf8(&bak_bytes),
+        ) {
+            (Ok(c), Ok(b)) => (c.to_owned(), b.to_owned()),
+            _ => {
+                out.push(FileDiff {
+                    path: t.original_path.clone(),
+                    unified: String::from("[binary files differ; no text diff]"),
+                });
+                continue;
+            }
+        };
+
+        // Generate unified diff between current and backup contents.
+        let diff = unified_diff(&cur, &bak, &t.original_path);
+
+        // Collect the diff result.
+        out.push(FileDiff {
+            path: t.original_path.clone(),
+            unified: diff,
+        });
+    }
+
+    Ok(out)
+}
+
+fn normalize_repo_rel(p: &Path) -> Result<PathBuf> {
+    if p.is_absolute() {
+        bail!("path must be repo-relative: {}", p.display());
+    }
+    let mut out = PathBuf::new();
+    for c in p.components() {
+        match c {
+            Component::ParentDir => bail!("path escapes repo: {}", p.display()),
+            Component::CurDir => {}
+            Component::Prefix(_) | Component::RootDir => {
+                bail!("path must be repo-relative: {}", p.display())
+            }
+            _ => out.push(c.as_os_str()),
+        }
+    }
+    if out.as_os_str().is_empty() {
+        bail!("empty path");
+    }
+    Ok(out)
+}
+
+fn read_manifest_ts(dir: &Path) -> Option<DateTime<Utc>> {
+    let s = fs::read_to_string(dir.join("manifest.json")).ok()?;
+    let m: SessionManifest = serde_json::from_str(&s).ok()?;
+    DateTime::parse_from_rfc3339(&m.timestamp)
+        .ok()
+        .map(|d| d.with_timezone(&Utc))
+}
+
+fn dir_mtime_fallback(ent: &fs::DirEntry) -> Option<DateTime<Utc>> {
+    let md = ent.metadata().ok()?;
+    let mt = md.modified().ok()?;
+    let dur = mt.duration_since(std::time::UNIX_EPOCH).ok()?;
+    Utc.timestamp_opt(dur.as_secs() as i64, dur.subsec_nanos())
+        .single()
+}
+
+fn parse_time_bound(spec: &str) -> Result<DateTime<Utc>> {
+    if let Ok(dt) = DateTime::parse_from_rfc3339(spec) {
+        return Ok(dt.with_timezone(&Utc));
+    }
+    let spec = spec.trim();
+    if spec.len() < 2 {
+        bail!("invalid --older-than: {spec}");
+    }
+    let (num, unit) = spec.split_at(spec.len() - 1);
+    let n: i64 = num
+        .parse()
+        .with_context(|| format!("invalid number: {spec}"))?;
+    if n < 0 {
+        bail!("negative durations not supported in --older-than: {spec}");
+    }
+    let now = Utc::now();
+    let dt = match unit {
+        "s" => now - chrono::Duration::seconds(n),
+        "m" => now - chrono::Duration::minutes(n),
+        "h" => now - chrono::Duration::hours(n),
+        "d" => now - chrono::Duration::days(n),
+        "w" => now - chrono::Duration::weeks(n),
+        _ => bail!("unsupported unit in --older-than (use s,m,h,d,w or RFC3339)"),
+    };
+    Ok(dt)
+}
+
+fn dir_size(path: &Path) -> Result<u64> {
+    fn walk(p: &Path, acc: &mut u64) -> std::io::Result<()> {
+        for e in fs::read_dir(p)? {
+            let e = e?;
+            let md = e.metadata()?;
+            if md.is_dir() {
+                walk(&e.path(), acc)?;
+            } else {
+                *acc = acc.saturating_add(md.len());
+            }
+        }
+        Ok(())
+    }
+    let mut total = 0;
+    walk(path, &mut total)?;
+    Ok(total)
+}
+
+fn rebuild_index(repo_root: &Path) -> Result<()> {
+    let base = repo_root.join(".rup").join("backups");
+    let index = base.join("index.jsonl");
+    if !base.exists() {
+        return Ok(());
+    }
+
+    let mut lines = Vec::<String>::new();
+    for ent in fs::read_dir(&base)? {
+        let ent = ent?;
+        if !ent.file_type()?.is_dir() {
+            continue;
+        }
+        if ent.file_name().to_string_lossy() == "tmp" {
+            continue;
+        }
+        let p = ent.path();
+        let m = p.join("manifest.json");
+        if !m.exists() {
+            continue;
+        }
+        let s = fs::read_to_string(&m)?;
+        let man: SessionManifest = serde_json::from_str(&s)?;
+        let rec = SessionIndexEntry {
+            id: man.id.clone(),
+            timestamp: man.timestamp.clone(),
+            success: man.success,
+            files: man.files.len(),
+            engine: man.engine.clone(),
+        };
+        lines.push(serde_json::to_string(&rec)?);
+    }
+
+    let tmp = index.with_extension("jsonl.tmp");
+    {
+        let mut f = fs::File::create(&tmp)?;
+        for l in &lines {
+            writeln!(f, "{l}")?;
+        }
+        let _ = f.sync_all();
+    }
+    fs::rename(&tmp, &index)?;
+    if let Ok(d) = fs::File::open(&base) {
+        let _ = d.sync_all();
+    }
+    Ok(())
+}
+
+/* ----- simple unified diff (context=3) ----- */
+
+fn unified_diff(a: &str, b: &str, path: &Path) -> String {
+    let a_lines: Vec<&str> = a.lines().collect();
+    let b_lines: Vec<&str> = b.lines().collect();
+    let hunks = diff_hunks(&a_lines, &b_lines, 3);
+    let mut out = String::new();
+    out.push_str(&format!("--- a/{}\n", path.display()));
+    out.push_str(&format!("+++ b/{}\n", path.display()));
+    for (a_lo, a_hi, b_lo, b_hi, ops) in hunks {
+        out.push_str(&format!(
+            "@@ -{},{} +{},{} @@\n",
+            a_lo + 1,
+            a_hi - a_lo,
+            b_lo + 1,
+            b_hi - b_lo
+        ));
+        let mut ai = a_lo;
+        let mut bi = b_lo;
+        for op in ops {
+            match op {
+                DiffOp::Equal(n) => {
+                    for _ in 0..n {
+                        out.push_str(&format!(" {}", a_lines[ai]));
+                        out.push('\n');
+                        ai += 1;
+                        bi += 1;
+                    }
+                }
+                DiffOp::Del(n) => {
+                    for _ in 0..n {
+                        out.push_str(&format!("-{}", a_lines[ai]));
+                        out.push('\n');
+                        ai += 1;
+                    }
+                }
+                DiffOp::Add(n) => {
+                    for _ in 0..n {
+                        out.push_str(&format!("+{}", b_lines[bi]));
+                        out.push('\n');
+                        bi += 1;
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+#[derive(Clone, Copy)]
+enum DiffOp {
+    Equal(usize),
+    Add(usize),
+    Del(usize),
+}
+
+fn diff_hunks(
+    a: &[&str],
+    b: &[&str],
+    ctx: usize,
+) -> Vec<(usize, usize, usize, usize, Vec<DiffOp>)> {
+    let (n, m) = (a.len(), b.len());
+    let mut dp = vec![vec![0usize; m + 1]; n + 1];
+    for i in (0..n).rev() {
+        for j in (0..m).rev() {
+            dp[i][j] = if a[i] == b[j] {
+                dp[i + 1][j + 1] + 1
+            } else {
+                dp[i + 1][j].max(dp[i][j + 1])
+            };
+        }
+    }
+    let mut ops = Vec::<DiffOp>::new();
+    let (mut i, mut j) = (0, 0);
+    while i < n || j < m {
+        if i < n && j < m && a[i] == b[j] {
+            push(&mut ops, DiffOp::Equal(1));
+            i += 1;
+            j += 1;
+        } else if j < m && (i == n || dp[i][j + 1] >= dp[i + 1][j]) {
+            push(&mut ops, DiffOp::Add(1));
+            j += 1;
+        } else {
+            push(&mut ops, DiffOp::Del(1));
+            i += 1;
+        }
+    }
+    // Build hunks with fixed context.
+    let mut hunks = Vec::new();
+    let mut a_cur = 0usize;
+    let mut b_cur = 0usize;
+    let mut win = Vec::<(usize, usize, DiffOp)>::new();
+
+    for op in ops {
+        match op {
+            DiffOp::Equal(k) => {
+                if !win.is_empty() {
+                    let take = k.min(ctx);
+                    win.push((a_cur, b_cur, DiffOp::Equal(take)));
+                    let (a_lo, a_hi, b_lo, b_hi, h) = flush(&win, ctx);
+                    hunks.push((a_lo, a_hi, b_lo, b_hi, h));
+                    win.clear();
+                    a_cur += k;
+                    b_cur += k;
+                } else {
+                    let keep = k.min(ctx);
+                    if keep > 0 {
+                        win.push((a_cur, b_cur, DiffOp::Equal(keep)));
+                    }
+                    a_cur += k;
+                    b_cur += k;
+                }
+            }
+            DiffOp::Add(_k) | DiffOp::Del(_k) => {
+                if win.is_empty() {
+                    let back_a = a_cur.saturating_sub(ctx);
+                    let back_b = b_cur.saturating_sub(ctx);
+                    let keep = (a_cur - back_a).min(b_cur - back_b);
+                    if keep > 0 {
+                        win.push((back_a, back_b, DiffOp::Equal(keep)));
+                    }
+                }
+                win.push((a_cur, b_cur, op));
+                match op {
+                    DiffOp::Add(x) => b_cur += x,
+                    DiffOp::Del(x) => a_cur += x,
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    if !win.is_empty() {
+        let (a_lo, a_hi, b_lo, b_hi, h) = flush(&win, ctx);
+        hunks.push((a_lo, a_hi, b_lo, b_hi, h));
+    }
+
+    if hunks.is_empty() {
+        hunks.push((0, 0, 0, 0, vec![DiffOp::Equal(0)]));
+    }
+
+    hunks
+}
+
+fn push(ops: &mut Vec<DiffOp>, op: DiffOp) {
+    if let Some(last) = ops.last_mut() {
+        match (*last, op) {
+            (DiffOp::Equal(a), DiffOp::Equal(b)) => {
+                *last = DiffOp::Equal(a + b);
+                return;
+            }
+            (DiffOp::Add(a), DiffOp::Add(b)) => {
+                *last = DiffOp::Add(a + b);
+                return;
+            }
+            (DiffOp::Del(a), DiffOp::Del(b)) => {
+                *last = DiffOp::Del(a + b);
+                return;
+            }
+            _ => {}
+        }
+    }
+    ops.push(op);
+}
+
+fn flush(win: &[(usize, usize, DiffOp)], ctx: usize) -> (usize, usize, usize, usize, Vec<DiffOp>) {
+    let a_lo = win.first().map(|x| x.0).unwrap_or(0);
+    let b_lo = win.first().map(|x| x.1).unwrap_or(0);
+    let mut a_len = 0usize;
+    let mut b_len = 0usize;
+    let mut out = Vec::new();
+    for (_, _, op) in win {
+        match *op {
+            DiffOp::Equal(k) => {
+                out.push(DiffOp::Equal(k));
+                a_len += k;
+                b_len += k;
+            }
+            DiffOp::Del(k) => {
+                out.push(DiffOp::Del(k));
+                a_len += k;
+            }
+            DiffOp::Add(k) => {
+                out.push(DiffOp::Add(k));
+                b_len += k;
+            }
+        }
+    }
+    out = trim(out, ctx);
+    (a_lo, a_lo + a_len, b_lo, b_lo + b_len, out)
+}
+
+fn trim(mut ops: Vec<DiffOp>, ctx: usize) -> Vec<DiffOp> {
+    if let Some(DiffOp::Equal(k)) = ops.first_mut()
+        && *k > ctx
+    {
+        *k = ctx;
+    }
+
+    if let Some(DiffOp::Equal(k)) = ops.last_mut()
+        && *k > ctx
+    {
+        *k = ctx;
+    }
+    if matches!(ops.first(), Some(DiffOp::Equal(0))) {
+        ops.remove(0);
+    }
+    if matches!(ops.last(), Some(DiffOp::Equal(0))) {
+        ops.pop();
+    }
+    ops
+}
+
+/* ----- streaming blake3 ----- */
+
+fn stream_blake3(path: &Path) -> Result<String> {
+    use blake3::Hasher as Blake3;
+    let mut f = std::fs::File::open(path)?;
+    let mut h = Blake3::new();
+    let mut buf = [0u8; 64 * 1024];
+
+    loop {
+        let n = f.read(&mut buf)?;
+
+        if n == 0 {
+            break;
+        }
+
+        h.update(&buf[..n]);
+    }
+
+    Ok(format!("blake3:{}", h.finalize().to_hex()))
+}
+
 #[cfg(test)]
 mod tests {
+    use chrono::Duration;
+
     use super::*;
 
     #[test]
-    fn test_parse_relative_time() {
+    fn test_parse_time_bound() {
         let base_time = Utc::now();
 
         // Test days
-        let result = parse_relative_time("7d").unwrap();
+        let result = parse_time_bound("7d").unwrap();
         let expected = base_time - Duration::days(7);
         assert!((result - expected).num_seconds().abs() < 5); // Within 5 seconds
 
         // Test hours
-        let result = parse_relative_time("24h").unwrap();
+        let result = parse_time_bound("24h").unwrap();
         let expected = base_time - Duration::hours(24);
         assert!((result - expected).num_seconds().abs() < 5);
 
         // Test negative durations are rejected
-        assert!(parse_relative_time("-7d").is_err());
-        assert!(parse_relative_time("-24h").is_err());
+        assert!(parse_time_bound("-7d").is_err());
+        assert!(parse_time_bound("-24h").is_err());
 
         // Test invalid formats
-        assert!(parse_relative_time("abc").is_err());
-        assert!(parse_relative_time("7x").is_err());
-        assert!(parse_relative_time("").is_err());
+        assert!(parse_time_bound("abc").is_err());
+        assert!(parse_time_bound("7x").is_err());
+        assert!(parse_time_bound("").is_err());
     }
 
     #[test]

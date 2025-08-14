@@ -25,7 +25,7 @@ pub mod core {
 
     /// Backup session management operations (list, show, restore, cleanup)
     pub mod backup_ops;
-    pub use backup_ops::{SessionInfo, ListRequest, ShowRequest, ShowResponse};
+    pub use backup_ops::{ListRequest, SessionInfo, ShowRequest, ShowResponse};
 
     /// EBNF to unified diff patch converter for Git integration
     pub mod patch;

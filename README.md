@@ -1,421 +1,104 @@
-# roughup
-
-A CLI tool optimized for LLM workflows with bidirectional code editing, smart extraction, and safe change management.
-
-**Key Features:**
-
-- **Hybrid Edit System** - Human-readable EBNF input with Git's robust 3-way merge application
-- **High-Performance Extraction** - Memory-mapped file I/O, parallel processing, deterministic output
-- **LLM-Optimized Output** - Token-aware chunking, symbol extraction, structured formats
-- **Cross-Platform Excellence** - Windows/Unix parity, CRLF/LF preservation, tested compatibility
-- **Production Hardening** - Zero-warning builds, typed error system, comprehensive validation
+Below is an ultra-compact, token-efficient rewrite of `TODO.md` that preserves full project context, moves Phase 3 to the front, and defers former Phase 2.5 to Phase 3.5.
 
 ---
 
-## Installation
+# Roughup — Roadmap (Local-Only, Phases 1–7)
 
-### Quick Install
+## 0) Purpose
 
-```bash
-cargo install --path .
-```
+Local-only, model-agnostic Rust CLI for LLM workflows: extract code context, validate EBNF edits, apply safely with deterministic backups/rollback.
 
-### Build from Source
+## 1) Invariants
 
-```bash
-# Release build (optimized binary named 'rup')
-cargo build --release
+- No network; deterministic outputs; preview-first; `--dry-run` ubiquitous.
+- Strict repo-relative paths; refuse escapes/submodules unless flagged.
+- CRLF/LF preserved; atomic writes; sessionized backups with DONE.
 
-# Binary location: target/release/rup
-```
+## 2) Status Snapshot
 
-> **Requirements:** Rust 2024 edition (MSRV 1.85+)
+- Phase 1: Edit engine + EBNF + atomic writes — complete.
+- Phase 2: Hybrid apply (internal+Git), typed exit codes, safety — complete.
+- Backups: Centralized system + CLI (list/show/restore/cleanup) — complete.
+- Foundation hardened: all 10 critical fixes applied (cross-platform fsync, ID gen, finalize timing, stale locks, atomic manifest, path validation, cleanup dedup, symlink UX, non-regular file guard, binary-diff fallback).
+- Tests: all unit + integration passing; clean build; no regressions.
 
----
+## 3) Prioritized Roadmap (Next)
 
-## Core Commands
+3. **Phase 3 — Smart Context Assembly** \[Top Priority]
+   Goal: minimal, high-signal, budgeted context packs.
+   Deliverables:
 
-### Project Exploration
+   - `symbol_index`: load `symbols.jsonl` (Rust/Py), exact/fuzzy lookup, spans.
+   - Relevance ranking: semantic (local embeddings, ONNX) → scope → proximity → history → lexical.
+   - `budgeter`: token/char estimate (tiktoken-rs), deterministic ordering, overflow strategies; optional test-impact heuristic.
+   - CLI `rup context`: `--budget`, `--include-tests|--include-deps`, `--template [refactor|bugfix|feature]`, `--semantic`, paste-ready output and `--json`.
+     Targets/AC:
+   - 1k-file repo: <2 s typical, <5 s heavy; estimate ±10%.
+   - Deterministic ordering; includes defs+deps and nearest tests (when requested) within budget.
 
-```bash
-# Project tree with line counts (gitignore-aware)
-rup tree --depth 2
+3.5. **Phase 3.5 — Conflict Resolution Assistant** \[After Phase 3]
+Goal: reduce/manual conflicts (exit code 2).
+Deliverables:
 
-# Extract specific line ranges with annotations
-rup extract src/lib.rs:1-75 src/cli.rs:1-171 --annotate --fence -o extracted.txt
+- Parser for conflict blocks (ours/theirs/base); categorizations; safe auto-fixes (imports/whitespace); confidence scoring.
+- `rup resolve <file>`; `--strategy [ours|theirs|manual|auto]`; TUI diff; `--auto-resolve-safe`.
+  Targets/AC: <100 ms parse; >95% accuracy on formatting/imports; deterministic; no unsafe auto-resolves.
 
-# Symbol extraction (Rust + Python via Tree-sitter)
-rup symbols --languages rust,python --output symbols.jsonl
-```
+4. **Phase 4 — Renderers & Local Discovery**
 
-### LLM-Assisted Editing (Production-Ready)
+   - Renderers: `markdown-chat`, `json-tool`, `patch` (configurable context).
+   - `rup outline`, `rup find`, `rup find-function`.
+     AC: deterministic output; 1k files outline <2 s.
 
-#### Apply Edit Specifications
+4.5. **Phase 4.5 — Feedback Loop & Learning**
 
-```bash
-# Preview changes (safe default - no writes)
-rup apply edit_spec.txt
+- Local SQLite: outcomes, patterns; confidence scores, risk hints; `rup stats|insights`.
+  AC: <10 ms overhead; actionable insights; no code content stored.
 
-# Preview with custom context lines
-rup preview edit_spec.txt --context-lines 5
+5. **Phase 5 — Analysis & Dependencies**
 
-# Apply changes with backup
-rup apply edit_spec.txt --apply --backup
+   - `usage`, `callers`, `deps`, `impact`.
+     AC: <1 s common; <4 s 1k-file; stable results.
 
-# Use different engines for robustness
-rup apply edit_spec.txt --apply --engine git --git-mode 3way
-rup apply edit_spec.txt --apply --engine auto  # Smart fallback (recommended)
-```
+6. **Phase 6 — Session/Context Persistence**
 
-#### EBNF Edit Format
+   - Save/load reproducible contexts; manifests with policy/budget; optional local encryption.
+     AC: byte-identical reload for unchanged repo; precise delta report otherwise.
 
-````
-FILE: src/main.rs
-GUARD-CID: a1b2c3d4e5f6g7h8
-REPLACE lines 10-15:
-OLD:
-```rust
-fn old_function() {
-    println!("old implementation");
-}
-````
+7. **Phase 7 — Ecosystem Integration**
 
-NEW:
+   - CI templates; pre-commit; container; editor/LSP; export/import with other tools.
+     AC: zero-config defaults; stable exit codes; fast startup.
 
-```rust
-fn new_function() {
-    println!("improved implementation");
-    // Added error handling
-}
-```
+## 4) CLI Surface (current+planned)
 
-INSERT at 20:
-NEW:
+`apply`, `preview`, `check-syntax`, `backup {list|show|restore|cleanup}`, `extract`, `symbols`, `chunk`, `tree`, `context`, `outline`, `find`, `find-function`, `usage`, `callers`, `deps`, `impact`.
+Global: `--no-color`, `--quiet`, `--dry-run`, `--json`, `--context-lines=N`.
+Exit codes: `0` ok, `2` conflicts, `3` invalid, `4` repo, `5` internal.
 
-```rust
-// Additional helper function
-fn helper() -> Result<()> {
-    Ok(())
-}
-```
+## 5) Performance Targets
 
-````
+- Context: <2 s typical; <5 s heavy.
+- Outline: <2 s (1k files).
+- Apply rollback: <300 ms.
+- Listing 1k+ backup sessions: <150 ms.
 
-### Content Processing
-```bash
-# Token-aware chunking for GPT models
-rup chunk large_file.rs --model gpt-4o --max-tokens 4000 --overlap 128
+## 6) Testing (must/should)
 
-# Chunk with symbol boundary preferences
-rup chunk codebase.txt --by-symbols --output-dir chunks/
-````
+- Must: determinism (all OSes), EBNF fuzz/property, repo-boundary & submodule refusal, backup life-cycle, conflict exit-code semantics.
+- Should: tokenizer/budget microbench, context macrobench, large-repo smoke, stale-lock + crash-recovery paths.
 
-### Validation & Safety
+## 7) Next Actions (Do Now)
 
-```bash
-# Validate edit syntax
-rup check-syntax edit_spec.txt
+1. Implement Phase 3 core: `symbol_index`, `budgeter`, deterministic ranking, `rup context` UX (`--budget`, templates, `--json`).
+2. Add Phase 3 tests/benches (estimate accuracy ±10%, determinism, perf caps).
+3. Plan Phase 3.5 API/TUI surfaces; define safe auto-rules and confidence thresholds.
+4. Update README/`--help` for `context`; add minimal examples.
 
-# Preview changes with unified diff and custom context
-rup preview edit_spec.txt --show-diff --context-lines 5
+## 8) Appendix: Completed Hardening (reference)
 
-# Manage backup sessions (read-only)
-rup backup list                 # case-insensitive engine filter, time filters
-rup backup show latest --json   # alias-aware; prefers completed sessions
-```
+- Cross-platform `sync_dir` (Windows no-op); atomic manifest writes; finalize flag timing; stale-lock GC (>60 s).
+- Path validation (reject `Prefix`/`RootDir`); cleanup dedup via `HashSet`; improved symlink/broken-link UX; non-regular file guard; binary-diff fallback.
+- Backups: centralized layout, DONE markers, BLAKE3, index.jsonl, list/show/restore/cleanup with JSON output.
 
 ---
-
-## Engine Architecture
-
-### Hybrid EBNF→Git System
-
-**Internal Engine (Fast)**
-
-- Lightning-fast direct file manipulation
-- Clear, structured error messages
-- Perfect for simple, clean edits
-- Comprehensive validation and conflict detection
-
-**Git Engine (Robust)**
-
-- Leverages `git apply` with 3-way merge capability
-- Handles code drift and context relocation
-- Professional patch generation with standard headers
-- Comprehensive error parsing and user guidance
-
-**Auto Engine (Intelligent - Recommended)**
-
-- Tries internal first for maximum speed
-- Automatically falls back to git on conflicts
-- Best of both worlds with smart decision making
-- Production-tested fallback logic
-
-```bash
-# Engine selection
-rup apply --engine internal  # Fast path (direct file manipulation)
-rup apply --engine git       # Robust path (3-way merge)
-rup apply --engine auto      # Smart fallback (recommended default)
-
-# Git engine modes
-rup apply --engine git --git-mode 3way    # Resilient (may leave conflict markers)
-rup apply --engine git --git-mode index   # Clean tree required
-# rup apply --engine git --git-mode worktree # (Not yet implemented)
-```
-
-### Safety Features
-
-**Preview-First UX**
-
-```bash
-rup apply edit.txt           # Shows preview only (safe default)
-rup apply edit.txt --apply   # Actually writes changes
-rup preview edit.txt         # Dedicated preview command with more options
-```
-
-**Advanced Conflict Management**
-
-- GUARD-CID system with deterministic content hashing (xxh64)
-- Comprehensive validation with typed error taxonomy
-- Clear conflict reporting with actionable suggestions
-- Machine-readable conflict output for scripts
-
-**Robust Backup System (Centralized Sessions)**
-
-```bash
-# All preimages are saved into a dedicated session directory:
-#   .rup/backups/<ISO8601>_<random>/
-# Each session contains a manifest and DONE marker for crash safety.
-
-# Example
-$ rup apply edit_spec.txt --apply --backup
-Backups: .rup/backups/2025-08-14T12-07-33Z_a1B2c3D4eF
-Manifest: .rup/backups/2025-08-14T12-07-33Z_a1B2c3D4eF/manifest.json
-
-# (Phase B2) Manage sessions
-rup backup list
-rup backup show 2025-08-14T12-07-33Z_a1B2c3D4eF
-# Planned: restore/cleanup subcommands in upcoming steps
-```
-
-**Cross-Platform Atomic Operations**
-
-- Windows-safe file replacement with proper permission handling
-- Unix/Linux compatibility with fsync guarantees
-- Cross-filesystem fallback for atomic writes
-- Repository boundary validation and symlink protection
-
----
-
-## Exit Codes (CI/Automation Ready)
-
-Standardized exit codes for reliable automation and CI/CD integration:
-
-- `0` - Success (no conflicts, changes applied successfully)
-- `2` - Conflicts detected (use --force to override, or resolve manually)
-- `3` - Invalid input/syntax (fix edit specification format)
-- `4` - Repository issues (boundary violations, git repo problems)
-- `5` - Internal errors (file I/O, system issues)
-
----
-
-## Configuration
-
-Create `roughup.toml` for project defaults:
-
-```toml
-[walk]
-ignore = ["target/**", "node_modules/**", ".git/**"]
-depth = 3
-
-[extract]
-annotate = true
-fence = true
-
-[symbols]
-languages = ["rust", "python"]
-include_private = false
-
-[chunk]
-model = "gpt-4o"
-max_tokens = 4000
-overlap = 128
-by_symbols = true
-
-[apply]
-engine = "auto"        # Recommended: smart fallback
-git_mode = "3way"      # Resilient 3-way merge
-backup = true          # Always create backups
-context_lines = 3      # Standard patch context
-force = false          # Require explicit --force for conflicts
-whitespace = "nowarn"  # LLM-friendly (ignore whitespace issues)
-```
-
-Initialize with:
-
-```bash
-rup init
-```
-
----
-
-## Advanced Usage
-
-### Multi-Engine Workflow
-
-```bash
-# Complex edit with fallback strategy
-rup apply complex_refactor.txt \
-  --engine auto \
-  --backup \
-  --context-lines 5 \
-  --verbose
-
-# Git-specific options with whitespace handling
-rup apply patch.txt \
-  --engine git \
-  --git-mode 3way \
-  --whitespace fix
-
-# Preview with same context as apply
-rup preview patch.txt --context-lines 5
-rup apply patch.txt --apply --context-lines 5
-```
-
-### Repository Integration
-
-```bash
-# Auto-detect git repository
-rup apply --repo-root .
-
-# Explicit repository root
-rup apply --repo-root /path/to/repo edit.txt
-```
-
-### Shell Completions
-
-```bash
-# Generate completions
-rup completions bash --out-dir ~/.local/share/bash-completion/completions
-rup completions zsh --out-dir ~/.oh-my-zsh/completions
-rup completions fish --out-dir ~/.config/fish/completions
-```
-
----
-
-## Performance & Architecture
-
-### High-Performance Design
-
-- **Memory Mapping**: Files >1MB use mmap for speed
-- **Parallel Processing**: Multi-threaded file walking and symbol extraction
-- **AST Caching**: Moka cache for repeated Tree-sitter operations
-- **Deterministic Output**: Stable, reproducible results
-
-### Cross-Platform Robustness
-
-- **Windows Support**: Drive letter parsing (`C:\path\file.rs:10-20`)
-- **Line Ending Handling**: Automatic CRLF/LF detection and preservation
-- **Atomic Operations**: Safe file replacement with permission preservation
-- **Path Safety**: Repository boundary validation and symlink protection
-- **Permission Handling**: Unix/Windows compatible with proper fallbacks
-- **Tempfile Strategy**: Cross-filesystem atomic writes with robust error handling
-
-### LLM Workflow Optimization
-
-- **Token-Aware Processing**: tiktoken-rs integration for accurate token counting
-- **Symbol Boundaries**: Intelligent chunking that preserves code structure
-- **Structured Output**: JSONL, fenced blocks, and metadata preservation
-- **Context Assembly**: Smart relevance ranking and budget management
-
----
-
-## Development
-
-### Build & Test
-
-```bash
-# Development workflow
-cargo fmt && cargo clippy --all-targets  # Format and lint
-cargo test                               # Full test suite (50+ tests)
-cargo build --release                    # Optimized build
-
-# Install locally as 'rup'
-cargo install --path .
-
-# Verify installation
-rup --version
-rup apply --help
-```
-
-### Architecture Overview
-
-```
-src/
-├── core/                   # High-performance processing pipeline
-│   ├── edit.rs            # EBNF parsing & application engine
-│   ├── patch.rs           # EBNF→unified diff converter
-│   ├── git.rs             # Git apply integration
-│   ├── apply_engine.rs    # Unified engine trait architecture
-│   ├── symbols.rs         # Tree-sitter symbol extraction
-│   └── extract/           # Line-range extraction with mmap
-├── infra/                 # Infrastructure & utilities
-│   ├── io.rs              # Smart file I/O with performance thresholds
-│   ├── line_index.rs      # Cross-platform line indexing
-│   └── walk.rs            # Parallel directory traversal
-├── parsers/               # Language-specific extractors
-│   ├── rust_parser.rs     # Rust symbols with qualified names
-│   └── python_parser.rs   # Python classes, functions, methods
-└── cli.rs                 # Command-line interface
-```
-
-### Testing Strategy
-
-- **Unit Tests**: Embedded in modules with `#[cfg(test)]` - 46+ test cases
-- **Integration Tests**: Cross-platform compatibility focused
-- **Production Hardening**: Max-depth code review with critical fixes applied
-- **Performance Tests**: Memory usage and speed validation
-- **Real-World Validation**: Actual git repository testing with complex edits
-- **Error Path Coverage**: Comprehensive error handling and edge case testing
-
----
-
-## Roadmap
-
-### Phase 1 & 2: Production-Ready Edit System (Complete)
-
-- ** Hybrid EBNF→Git architecture** with auto-fallback intelligence
-- ** Safe preview-first UX** with atomic writes and comprehensive validation
-- ** Cross-platform excellence** with Windows/Unix parity and robust error handling
-- ** Professional CLI** with standardized exit codes and typed error taxonomy
-- ** Production hardening** with max-depth code review fixes applied
-- ** Zero-warning builds** with comprehensive type safety and memory management
-- ** Enterprise robustness** with repository boundary validation and atomic operations
-
-### Phase 3: Smart Context Assembly (Planned)
-
-- Queryable symbol index with dependency tracking
-- Budget-aware context selection for token limits
-- Automated test and helper inclusion logic
-- Chat-optimized output with CID headers and relevance ranking
-
-Recent: Backup session management (list/show) implemented with JSON output, alias resolution (prefers completed), and fast listing (filter→sort→limit→manifest-read).
-
-### Phase 4+: Advanced Features (Future)
-
-- Enhanced output formats (clean, annotated, simple)
-- Advanced dependency analysis and impact assessment
-- Session management and context persistence
-- IDE integrations and ecosystem tools
-
----
-
-## License
-
-MIT OR Apache-2.0
-
----
-
-**Note**: Language support is intentionally scoped to Rust + Python through Phase 3 to maintain focus and quality. The architecture is designed for easy extension to additional languages in future phases.
-
-**Status**: Production-ready with comprehensive hardening. Phase 2 complete with all critical fixes applied. Ready for Phase 3 development.
