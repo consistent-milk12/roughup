@@ -12,24 +12,25 @@ Privacy-first Rust CLI for LLM workflows: extract minimal code context, validate
 
 ## Production Status
 
-**Phases 1-3 Complete + Hardened Systems + 5 Critical Fixes**
+**Phases 1-3 Complete + Hardened Systems + Enhanced Priority System**
 
-- Edit engine: EBNF parser, overlap detection, atomic writes
+- Edit engine: EBNF parser, robust INSERT/REPLACE parsing, atomic writes
 - Hybrid apply: internal engine + git fallback, typed exit codes
 - Backup system: centralized `.rup/backups/`, BLAKE3 checksums, CLI management
-- Smart context: symbol indexing, token budgeting, relevance ranking, CLI integration
-- Foundation: 15 critical fixes applied, all tests passing
-- Latest fixes: unstable let-chain syntax, path constraints for new files, comprehensive overlap detection, newline preservation, session display formatting
+- Smart context: enhanced Priority system with SymbolRanker, token budgeting, NaN-safe deterministic ordering
+- Foundation: mentor's critical budget fixes applied, comprehensive test coverage
+- Latest: parse_content_block robustness for fenced/unfenced content, optional blank lines, CRLF normalization
 
 ## Implementation Priority Queue
 
-**Phase 3: Smart Context Assembly** [COMPLETED]
+**Phase 3: Smart Context Assembly** [COMPLETED + ENHANCED]
 
-- symbol_index.rs`: load symbols.jsonl, exact/fuzzy lookup, spans
-- Relevance ranking: semantic → scope → proximity → git history
-- budgeter.rs`: tiktoken-rs estimation, deterministic ordering, overflow strategies
+- Enhanced Priority system: level/relevance/proximity fields with NaN safety
+- SymbolRanker: semantic matching, anchor-aware scoring, development phase awareness
+- Budget system: fixed shrink logic, 2-stage hard item expansion, deterministic total_cmp ordering
+- Robust EBNF parser: fenced/unfenced content, optional blank lines, improved INSERT handling
 - CLI: `rup context --budget --template [refactor|bugfix|feature] --semantic`
-- Performance: <2s typical, <5s heavy; ±10% accuracy; deterministic; all tests passing
+- Performance: <2s typical, deterministic across runs, production-ready
 
 **Phase 3.5: Conflict Resolution** [NEXT - Critical Priority]
 

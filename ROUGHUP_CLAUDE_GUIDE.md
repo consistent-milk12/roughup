@@ -1,6 +1,6 @@
-# Roughup CLI Guide for Claude Web Chat Generated Using Claude Code
+# Roughup CLI Guide for Web Chat with AI Models
 
-I'm using **Roughup** (`rup`), a privacy-first Rust CLI tool for LLM-assisted code editing. All operations are local-only with atomic backups. Here's how to use it throughout our session:
+I'm using **Roughup** (`rup`), a privacy-first Rust CLI tool for LLM-assisted code editing (Only tested for Rust currently). All operations are local-only with atomic backups. Here's how to use it throughout our session:
 
 ## Core Workflow Commands
 

@@ -84,16 +84,16 @@ Roughup is a production-ready CLI tool for LLM-assisted code workflows with stro
 - **Issue**: Broken pipe warning with `head` command (cosmetic only)
 - **Output**: Shell completion scripts
 
-### ⚠️ Partially Working Commands
+### ✅ Recently Enhanced Commands
 
 #### `rup apply/preview` - Edit Application
 
-- **Status**: Syntax works, content validation strict
-- **Features**: EBNF parsing, internal/git engines, backup integration, preview mode
-- **EBNF Format**: Requires `REPLACE lines X-Y:` with fenced code blocks
-- **Issue**: OLD content matching is very strict (whitespace sensitive)
+- **Status**: Production ready with robust parsing
+- **Features**: EBNF parsing, fenced/unfenced content support, internal/git engines, backup integration
+- **EBNF Format**: Supports both `REPLACE lines X-Y:` and `INSERT at N:` operations
+- **Enhancement**: Handles optional blank lines, normalizes CRLF, accepts unfenced content blocks
 - **Usage**: `rup preview edit_spec.ebnf`, `rup apply edit_spec.ebnf --apply --backup`
-- **Workaround**: Must match exact whitespace in OLD blocks
+- **Improvement**: More forgiving content parsing while maintaining safety
 
 ## EBNF Edit Format
 
@@ -118,10 +118,13 @@ replacement content
 
 INSERT at 20:
 NEW:
-```
-
 content to insert
 
+# OR with fences:
+INSERT at 20:
+NEW:
+```rust
+content to insert
 ```
 
 DELETE lines 25-30:
@@ -162,10 +165,10 @@ new content
 
 ## Current Limitations
 
-1. **EBNF Apply**: Very strict whitespace matching in OLD blocks
-2. **Init Command**: Doesn't create parent directories
-3. **Completions**: Cosmetic broken pipe warning with head/tail
-4. **Missing Commands**: TODO.md mentions `outline`, `find`, `find-function`, `usage`, `callers`, `deps`, `impact` but these are not implemented
+1. **Init Command**: Doesn't create parent directories
+2. **Completions**: Cosmetic broken pipe warning with head/tail
+3. **Missing Commands**: TODO.md mentions `outline`, `find`, `find-function`, `usage`, `callers`, `deps`, `impact` but these are not implemented
+4. **Priority System**: Enhanced features need documentation for optimal usage
 
 ## Recommended Workflows
 
