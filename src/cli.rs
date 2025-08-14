@@ -215,7 +215,8 @@ pub enum GitMode {
     ThreeWay,
     /// Apply to index (requires clean preimage)
     Index,
-    /// Apply to temporary worktree
+    /// Apply to temporary worktree (experimental, currently disabled)
+    #[value(help = "Worktree mode (not implemented)")]
     Worktree,
 }
 
@@ -261,6 +262,10 @@ pub struct PreviewArgs {
     /// Force apply even with conflicts
     #[arg(long)]
     pub force: bool,
+
+    /// Context lines for patch generation (matches --apply)
+    #[arg(long, default_value = "3")]
+    pub context_lines: usize,
 }
 
 #[derive(Parser)]

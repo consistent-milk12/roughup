@@ -159,6 +159,17 @@ impl std::fmt::Display for ApplyErr {
 
 impl std::error::Error for ApplyErr {}
 
+impl From<ApplyErr> for ApplyCliError {
+    fn from(a: ApplyErr) -> Self {
+        match a {
+            ApplyErr::InvalidSpec(m) => ApplyCliError::InvalidInput(m),
+            ApplyErr::RepoIssue(m) => ApplyCliError::Repo(m),
+            ApplyErr::Conflicts { details } => ApplyCliError::Conflicts(details.join("\n")),
+            ApplyErr::Internal(e) => ApplyCliError::Internal(format!("{:#}", e)),
+        }
+    }
+}
+
 /// Explicit run-mode computed from flags
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum RunMode {
@@ -985,7 +996,10 @@ pub fn apply_run(args: ApplyArgs, ctx: &AppContext) -> Result<()> {
         };
 
     // 6) Always check() first for consistent preview
-    let preview = engine.check(&spec).map_err(normalize_err)?;
+    let preview = engine.check(&spec).map_err(|e| {
+        let (kind, _code) = normalize_err_typed(e);
+        ApplyCliError::from(kind)
+    })?;
 
     // 7) Render preview (unified diff) unless --quiet
     if !ctx.quiet {
@@ -1022,7 +1036,10 @@ pub fn apply_run(args: ApplyArgs, ctx: &AppContext) -> Result<()> {
     }
 
     // 10) Apply for real
-    let report = engine.apply(&spec).map_err(normalize_err)?;
+    let report = engine.apply(&spec).map_err(|e| {
+        let (kind, _code) = normalize_err_typed(e);
+        ApplyCliError::from(kind)
+    })?;
 
     // 11) Report results and return
     if !ctx.quiet {
@@ -1050,14 +1067,10 @@ pub fn finish_with_exit(result: Result<()>) -> ! {
     match result {
         Ok(()) => std::process::exit(0),
         Err(e) => {
-            // Try to map anyhow error into our taxonomy
-            let cli_error = if let Some(cli) = e.downcast_ref::<ApplyCliError>() {
-                cli.clone()
-            } else {
-                normalize_err(e)
-            };
-            eprintln!("{}", cli_error);
-            std::process::exit(exit_code_for(&cli_error));
+            // Prefer typed mapping; fall back to legacy
+            let (typed, code) = normalize_err_typed(e);
+            eprintln!("{}", typed);
+            std::process::exit(code);
         }
     }
 }
@@ -1103,7 +1116,7 @@ pub fn preview_run(args: PreviewArgs, ctx: &AppContext) -> Result<()> {
                     false, // backup
                     args.force,
                     cwd.clone(),
-                    3, // default context_lines for preview
+                    args.context_lines,
                 )
                 .map_err(|e| ApplyCliError::Internal(format!("Engine creation failed: {}", e)))?
             }
@@ -1114,12 +1127,15 @@ pub fn preview_run(args: PreviewArgs, ctx: &AppContext) -> Result<()> {
                 false, // backup
                 args.force,
                 repo_root.unwrap_or_else(|| cwd.clone()),
-                3, // default context_lines for preview
+                args.context_lines,
             )
             .map_err(|e| ApplyCliError::Internal(format!("Engine creation failed: {}", e)))?,
         };
 
-    let preview = engine.check(&spec).map_err(normalize_err)?;
+    let preview = engine.check(&spec).map_err(|e| {
+        let (kind, _code) = normalize_err_typed(e);
+        ApplyCliError::from(kind)
+    })?;
 
     if !ctx.quiet {
         if args.show_diff && !preview.patch_content.is_empty() {
@@ -1230,9 +1246,12 @@ fn write_atomic(path: &Path, data: &[u8]) -> Result<()> {
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
 
     // Preserve original permissions
+    #[cfg(unix)]
     let perms = fs::metadata(path)
         .map(|m| m.permissions())
-        .unwrap_or_else(|_| std::fs::Permissions::from_mode(0o644));
+        .unwrap_or_else(|_| std::os::unix::fs::PermissionsExt::from_mode(0o644));
+    #[cfg(not(unix))]
+    let perms = fs::metadata(path).map(|m| m.permissions()).ok();
 
     let tmp = match tempfile::NamedTempFile::new_in(dir) {
         Ok(t) => t,
@@ -1247,7 +1266,12 @@ fn write_atomic(path: &Path, data: &[u8]) -> Result<()> {
     file.sync_all()?;
 
     // Apply permissions to the temp file (best effort)
+    #[cfg(unix)]
     fs::set_permissions(tmp.path(), perms).context("set temp permissions")?;
+    #[cfg(not(unix))]
+    if let Some(perms) = perms {
+        fs::set_permissions(tmp.path(), perms).context("set temp permissions")?;
+    }
 
     // fsync parent dir to ensure durability on Unix
     #[cfg(unix)]
@@ -1268,9 +1292,6 @@ fn write_atomic(path: &Path, data: &[u8]) -> Result<()> {
 
     Ok(())
 }
-
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
 
 #[cfg(test)]
 mod tests {

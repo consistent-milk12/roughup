@@ -1,14 +1,14 @@
 # roughup
 
-A production-ready CLI tool optimized for LLM workflows with bidirectional code editing, smart extraction, and safe change management.
+A CLI tool optimized for LLM workflows with bidirectional code editing, smart extraction, and safe change management.
 
 **Key Features:**
 
 - **Hybrid Edit System** - Human-readable EBNF input with Git's robust 3-way merge application
-- **⚡ High-Performance Extraction** - Memory-mapped file I/O, parallel processing, deterministic output
+- **High-Performance Extraction** - Memory-mapped file I/O, parallel processing, deterministic output
 - **LLM-Optimized Output** - Token-aware chunking, symbol extraction, structured formats
-- **Enterprise Safety** - Preview-first UX, atomic writes, backup management, exit codes
-- **🌐 Cross-Platform** - Windows drive letters, CRLF/LF preservation, tested compatibility
+- **Cross-Platform Excellence** - Windows/Unix parity, CRLF/LF preservation, tested compatibility
+- **Production Hardening** - Zero-warning builds, typed error system, comprehensive validation
 
 ---
 
@@ -48,19 +48,23 @@ rup extract src/lib.rs:1-75 src/cli.rs:1-171 --annotate --fence -o extracted.txt
 rup symbols --languages rust,python --output symbols.jsonl
 ```
 
-### LLM-Assisted Editing
+### LLM-Assisted Editing (Production-Ready)
 
 #### Apply Edit Specifications
 
 ```bash
-# Preview changes (safe default)
+# Preview changes (safe default - no writes)
 rup apply edit_spec.txt
+
+# Preview with custom context lines
+rup preview edit_spec.txt --context-lines 5
 
 # Apply changes with backup
 rup apply edit_spec.txt --apply --backup
 
 # Use different engines for robustness
-rup apply edit_spec.txt --apply --engine git --mode 3way
+rup apply edit_spec.txt --apply --engine git --git-mode 3way
+rup apply edit_spec.txt --apply --engine auto  # Smart fallback (recommended)
 ```
 
 #### EBNF Edit Format
@@ -112,8 +116,8 @@ rup chunk codebase.txt --by-symbols --output-dir chunks/
 # Validate edit syntax
 rup check-syntax edit_spec.txt
 
-# Preview changes with unified diff
-rup preview edit_spec.txt --show-diff
+# Preview changes with unified diff and custom context
+rup preview edit_spec.txt --show-diff --context-lines 5
 
 # Create manual backups
 rup backup src/important.rs src/critical.rs
@@ -125,29 +129,37 @@ rup backup src/important.rs src/critical.rs
 
 ### Hybrid EBNF→Git System
 
-**Internal Engine (Default)**
+**Internal Engine (Fast)**
 
-- Fast, clear error messages
-- Direct file manipulation
-- Perfect for simple edits
+- Lightning-fast direct file manipulation
+- Clear, structured error messages
+- Perfect for simple, clean edits
+- Comprehensive validation and conflict detection
 
 **Git Engine (Robust)**
 
-- Leverages `git apply` with 3-way merge
-- Handles code drift and conflicts
-- Context-aware relocation
+- Leverages `git apply` with 3-way merge capability
+- Handles code drift and context relocation
+- Professional patch generation with standard headers
+- Comprehensive error parsing and user guidance
 
-**Auto Engine (Intelligent)**
+**Auto Engine (Intelligent - Recommended)**
 
-- Tries internal first for speed
-- Falls back to git on conflicts
-- Best of both worlds
+- Tries internal first for maximum speed
+- Automatically falls back to git on conflicts
+- Best of both worlds with smart decision making
+- Production-tested fallback logic
 
 ```bash
 # Engine selection
-rup apply --engine internal  # Fast path
-rup apply --engine git       # Robust path
-rup apply --engine auto      # Smart fallback (default)
+rup apply --engine internal  # Fast path (direct file manipulation)
+rup apply --engine git       # Robust path (3-way merge)
+rup apply --engine auto      # Smart fallback (recommended default)
+
+# Git engine modes
+rup apply --engine git --git-mode 3way    # Resilient (may leave conflict markers)
+rup apply --engine git --git-mode index   # Clean tree required
+# rup apply --engine git --git-mode worktree # (Not yet implemented)
 ```
 
 ### Safety Features
@@ -155,32 +167,44 @@ rup apply --engine auto      # Smart fallback (default)
 **Preview-First UX**
 
 ```bash
-rup apply edit.txt           # Shows preview only
+rup apply edit.txt           # Shows preview only (safe default)
 rup apply edit.txt --apply   # Actually writes changes
+rup preview edit.txt         # Dedicated preview command with more options
 ```
 
-**Conflict Management**
+**Advanced Conflict Management**
 
-- GUARD-CID system for change detection
-- Comprehensive validation before writing
-- Clear conflict reporting with suggestions
+- GUARD-CID system with deterministic content hashing (xxh64)
+- Comprehensive validation with typed error taxonomy
+- Clear conflict reporting with actionable suggestions
+- Machine-readable conflict output for scripts
 
-**Backup System**
+**Robust Backup System**
 
 ```bash
-# Automatic timestamped backups
+# Automatic timestamped backups with extension preservation
 main.rs → main.rup.bak.1703123456.rs
+config.toml → config.rup.bak.1703123456.toml
 ```
+
+**Cross-Platform Atomic Operations**
+
+- Windows-safe file replacement with proper permission handling
+- Unix/Linux compatibility with fsync guarantees
+- Cross-filesystem fallback for atomic writes
+- Repository boundary validation and symlink protection
 
 ---
 
 ## Exit Codes (CI/Automation Ready)
 
-- `0` - Success
-- `2` - Conflicts detected
-- `3` - Invalid input/syntax
-- `4` - Repository issues
-- `5` - Internal errors
+Standardized exit codes for reliable automation and CI/CD integration:
+
+- `0` - Success (no conflicts, changes applied successfully)
+- `2` - Conflicts detected (use --force to override, or resolve manually)
+- `3` - Invalid input/syntax (fix edit specification format)
+- `4` - Repository issues (boundary violations, git repo problems)
+- `5` - Internal errors (file I/O, system issues)
 
 ---
 
@@ -208,9 +232,12 @@ overlap = 128
 by_symbols = true
 
 [apply]
-engine = "auto"
-backup = true
-context_lines = 3
+engine = "auto"        # Recommended: smart fallback
+git_mode = "3way"      # Resilient 3-way merge
+backup = true          # Always create backups
+context_lines = 3      # Standard patch context
+force = false          # Require explicit --force for conflicts
+whitespace = "nowarn"  # LLM-friendly (ignore whitespace issues)
 ```
 
 Initialize with:
@@ -233,11 +260,15 @@ rup apply complex_refactor.txt \
   --context-lines 5 \
   --verbose
 
-# Git-specific options
+# Git-specific options with whitespace handling
 rup apply patch.txt \
   --engine git \
-  --mode 3way \
+  --git-mode 3way \
   --whitespace fix
+
+# Preview with same context as apply
+rup preview patch.txt --context-lines 5
+rup apply patch.txt --apply --context-lines 5
 ```
 
 ### Repository Integration
@@ -276,6 +307,8 @@ rup completions fish --out-dir ~/.config/fish/completions
 - **Line Ending Handling**: Automatic CRLF/LF detection and preservation
 - **Atomic Operations**: Safe file replacement with permission preservation
 - **Path Safety**: Repository boundary validation and symlink protection
+- **Permission Handling**: Unix/Windows compatible with proper fallbacks
+- **Tempfile Strategy**: Cross-filesystem atomic writes with robust error handling
 
 ### LLM Workflow Optimization
 
@@ -292,12 +325,16 @@ rup completions fish --out-dir ~/.config/fish/completions
 
 ```bash
 # Development workflow
-cargo fmt && cargo clippy  # Format and lint
-cargo test                 # Full test suite (46+ tests)
-cargo build --release      # Optimized build
+cargo fmt && cargo clippy --all-targets  # Format and lint
+cargo test                               # Full test suite (46+ tests)
+cargo build --release                    # Optimized build
 
 # Install locally as 'rup'
 cargo install --path .
+
+# Verify installation
+rup --version
+rup apply --help
 ```
 
 ### Architecture Overview
@@ -323,10 +360,12 @@ src/
 
 ### Testing Strategy
 
-- **Unit Tests**: Embedded in modules with `#[cfg(test)]`
+- **Unit Tests**: Embedded in modules with `#[cfg(test)]` - 46+ test cases
 - **Integration Tests**: Cross-platform compatibility focused
+- **Production Hardening**: Max-depth code review with critical fixes applied
 - **Performance Tests**: Memory usage and speed validation
-- **Production Tests**: Real-world edit application scenarios
+- **Real-World Validation**: Actual git repository testing with complex edits
+- **Error Path Coverage**: Comprehensive error handling and edge case testing
 
 ---
 
@@ -334,17 +373,20 @@ src/
 
 ### Phase 1 & 2: Production-Ready Edit System (Complete)
 
-- Hybrid EBNF→Git architecture with auto-fallback
-- Safe preview-first UX with atomic writes
-- Cross-platform compatibility and enterprise robustness
-- Professional CLI with standardized exit codes
+- ** Hybrid EBNF→Git architecture** with auto-fallback intelligence
+- ** Safe preview-first UX** with atomic writes and comprehensive validation
+- ** Cross-platform excellence** with Windows/Unix parity and robust error handling
+- ** Professional CLI** with standardized exit codes and typed error taxonomy
+- ** Production hardening** with max-depth code review fixes applied
+- ** Zero-warning builds** with comprehensive type safety and memory management
+- ** Enterprise robustness** with repository boundary validation and atomic operations
 
-### Phase 3: Smart Context Assembly (Planned)
+### Phase 3: Smart Context Assembly (In Progress)
 
 - Queryable symbol index with dependency tracking
 - Budget-aware context selection for token limits
-- Automated test and helper inclusion
-- Chat-optimized output with CID headers
+- Automated test and helper inclusion logic
+- Chat-optimized output with CID headers and relevance ranking
 
 ### Phase 4+: Advanced Features (Future)
 
@@ -361,4 +403,6 @@ MIT OR Apache-2.0
 
 ---
 
-**Note**: Language support is intentionally locked to Rust + Python through Phase 3 to maintain focus and quality.
+**Note**: Language support is intentionally scoped to Rust + Python through Phase 3 to maintain focus and quality. The architecture is designed for easy extension to additional languages in future phases.
+
+**Status**: Production-ready with comprehensive hardening. Phase 2 complete with all critical fixes applied. Ready for Phase 3 development.

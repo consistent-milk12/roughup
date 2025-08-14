@@ -277,7 +277,11 @@ impl GitEngine {
                 }
             }
             GitMode::Worktree => {
-                // Apply to working tree only
+                // Not implemented yet: we do not create ephemeral worktrees here.
+                // Safer to fail early with a clear message.
+                anyhow::bail!(
+                    "GitMode::Worktree is not implemented yet. Use --git-mode 3way or --git-mode index."
+                );
             }
         }
 

@@ -400,8 +400,8 @@ fn merge_adjacent_hunks(hunks: Vec<Hunk>, context_lines: usize) -> Vec<Hunk> {
 
     for next in hunks.into_iter().skip(1) {
         // Check if hunks are close enough to merge
-        let current_end = current.old_start + current.old_count;
-        let gap = next.old_start.saturating_sub(current_end);
+        let current_end_inclusive = current.old_start + current.old_count - 1;
+        let gap = next.old_start.saturating_sub(current_end_inclusive + 1);
 
         if gap <= context_lines * 2 {
             // Merge hunks

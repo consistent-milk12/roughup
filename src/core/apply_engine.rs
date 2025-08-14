@@ -287,6 +287,10 @@ impl ApplyEngine for HybridEngine {
                         " | Git: {} conflict(s)",
                         git_preview.conflicts.len()
                     ));
+                    // concatenate machine-readable conflicts for scripts
+                    if !git_preview.conflicts.is_empty() {
+                        preview.conflicts.extend(git_preview.conflicts);
+                    }
                 }
                 Ok(preview)
             }
@@ -313,6 +317,10 @@ impl ApplyEngine for HybridEngine {
                     match git.apply(spec) {
                         Ok(mut git_report) => {
                             git_report.engine_used = Engine::Auto;
+                            // Optionally surface that internal had conflicts but git resolved them:
+                            if !internal_report.conflicts.is_empty() {
+                                git_report.conflicts.extend(internal_report.conflicts);
+                            }
                             Ok(git_report)
                         }
                         Err(err) => {
