@@ -176,7 +176,6 @@ fn build_symbol(kind: SymbolKind, node: Node, bytes: &[u8], file: &Path) -> Opti
     })
 }
 
-
 fn first_named_child_text<'a>(node: Node<'a>, bytes: &[u8], kinds: &[&str]) -> Option<String> {
     for i in 0..node.named_child_count() {
         let c = node.named_child(i)?;

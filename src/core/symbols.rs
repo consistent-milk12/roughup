@@ -337,7 +337,11 @@ impl LineNumberMapper {
         // For each file, build an index and set line numbers
         for (file, idxs) in by_file {
             // Re-read using absolute path: root.join(relative)
-            let abs = if file.is_absolute() { file.clone() } else { root.join(&file) };
+            let abs = if file.is_absolute() {
+                file.clone()
+            } else {
+                root.join(&file)
+            };
             let content = std::fs::read_to_string(&abs)
                 .with_context(|| format!("Failed to re-read {}", abs.display()))?;
 

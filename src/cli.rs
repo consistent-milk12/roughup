@@ -46,6 +46,18 @@ pub enum Commands {
     /// Split extracted content into token-sized chunks
     Chunk(ChunkArgs),
 
+    /// Apply LLM-suggested edits to source files
+    Apply(ApplyArgs),
+
+    /// Preview edit changes without applying them
+    Preview(PreviewArgs),
+
+    /// Validate edit syntax and check for conflicts
+    CheckSyntax(CheckSyntaxArgs),
+
+    /// Create backup of files before editing
+    Backup(BackupArgs),
+
     /// Initialize a roughup.toml config file
     Init(InitArgs),
 
@@ -134,6 +146,117 @@ pub struct ChunkArgs {
     /// Token overlap between chunks
     #[arg(long, default_value = "128")]
     pub overlap: usize,
+}
+
+#[derive(Parser)]
+pub struct ApplyArgs {
+    /// Edit specification file to apply
+    pub edit_file: Option<PathBuf>,
+
+    /// Read edit specification from clipboard
+    #[arg(long, conflicts_with = "edit_file")]
+    pub from_clipboard: bool,
+
+    /// Preview changes without applying them (deprecated, use default behavior)
+    #[arg(long)]
+    pub preview: bool,
+
+    /// Apply changes to files (required for write operations)
+    #[arg(long)]
+    pub apply: bool,
+
+    /// Git repository root (auto-detected if not specified)
+    #[arg(long)]
+    pub repo_root: Option<PathBuf>,
+
+    /// Create backup files before applying changes
+    #[arg(long)]
+    pub backup: bool,
+
+    /// Force apply even with conflicts
+    #[arg(long)]
+    pub force: bool,
+
+    /// Show verbose output during application
+    #[arg(long)]
+    pub verbose: bool,
+
+    /// Apply engine: internal (fast, clear errors), git (robust, 3-way merge), auto (fallback)
+    #[arg(long, default_value = "internal")]
+    pub engine: ApplyEngine,
+
+    /// Git apply mode when using git engine
+    #[arg(long, default_value = "3way")]
+    pub git_mode: GitMode,
+
+    /// Context lines for patch generation
+    #[arg(long, default_value = "3")]
+    pub context_lines: usize,
+
+    /// Whitespace handling for git apply
+    #[arg(long, default_value = "nowarn")]
+    pub whitespace: WhitespaceMode,
+}
+
+#[derive(Debug, Clone, ValueEnum)]
+pub enum ApplyEngine {
+    /// Fast internal engine with clear error messages
+    Internal,
+    /// Git apply engine with 3-way merge capability  
+    Git,
+    /// Try internal first, fallback to git on conflicts
+    Auto,
+}
+
+#[derive(Debug, Clone, ValueEnum)]
+pub enum GitMode {
+    /// 3-way merge (resilient, may leave conflict markers)
+    #[value(name = "3way")]
+    ThreeWay,
+    /// Apply to index (requires clean preimage)
+    Index,
+    /// Apply to temporary worktree
+    Worktree,
+}
+
+#[derive(Debug, Clone, ValueEnum)]
+pub enum WhitespaceMode {
+    /// Ignore whitespace issues
+    Nowarn,
+    /// Warn about whitespace issues
+    Warn,
+    /// Fix whitespace issues automatically
+    Fix,
+}
+
+#[derive(Parser)]
+pub struct PreviewArgs {
+    /// Edit specification file to preview
+    pub edit_file: Option<PathBuf>,
+
+    /// Read edit specification from clipboard
+    #[arg(long, conflicts_with = "edit_file")]
+    pub from_clipboard: bool,
+
+    /// Show unified diff format
+    #[arg(long, default_value = "true")]
+    pub show_diff: bool,
+}
+
+#[derive(Parser)]
+pub struct CheckSyntaxArgs {
+    /// Edit specification file to validate
+    pub edit_file: PathBuf,
+}
+
+#[derive(Parser)]
+pub struct BackupArgs {
+    /// Files to backup
+    pub files: Vec<PathBuf>,
+
+    /// Create backup before making changes (used with other commands)
+    #[arg(long)]
+    pub before_changes: bool,
 }
 
 #[derive(Parser)]

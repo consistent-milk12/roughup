@@ -53,11 +53,16 @@ tiktoken-rs = { version = "0.7.0" }
 arboard = { version = "3.6.0" }
 smallvec = "1.15.1"
 
+# Deterministic hashing for CID
+xxhash-rust = { version = "0.8.15", features = ["xxh64"] }
+
+# Atomic file operations
+tempfile = "3.20.0"
+
 [build-dependencies]
 cc = "*" # helps some tree-sitter grammar builds on CI
 
 [dev-dependencies]
-tempfile = "3.20.0"
 
 [profile.release]
 opt-level = 3

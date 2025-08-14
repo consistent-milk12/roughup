@@ -15,6 +15,24 @@ pub mod core {
     pub mod extract;
     pub use extract::run as extract_run;
 
+    /// Edit format parsing and application system for LLM collaboration
+    pub mod edit;
+    pub use edit::{EditConflict, EditEngine, EditOperation, EditResult, EditSpec};
+
+    /// EBNF to unified diff patch converter for Git integration
+    pub mod patch;
+    pub use patch::{
+        FilePatch, Hunk, PatchConfig, PatchSet, generate_patches, render_unified_diff,
+    };
+
+    /// Git apply integration with 3-way merge and error mapping
+    pub mod git;
+    pub use git::{GitConflict, GitEngine, GitMode, GitOptions, GitOutcome, Whitespace};
+
+    /// Unified apply engine trait for hybrid architecture
+    pub mod apply_engine;
+    pub use apply_engine::{ApplyEngine, ApplyReport, Engine, Preview, create_engine};
+
     /// Tree-sitter symbol extraction pipeline (Rust+Python locked, 572 lines)
     pub mod symbols;
     pub use symbols::{Symbol, SymbolKind, Visibility, run as symbols_run};
@@ -67,7 +85,9 @@ pub mod infra {
 
 // Strategic re-exports for clean CLI interface
 pub use cli::{AppContext, Cli, Commands};
-pub use core::{chunk_run, extract_run, symbols_run, tree_run};
+pub use core::{
+    chunk_run, extract_run, generate_patches, render_unified_diff, symbols_run, tree_run,
+};
 pub use infra::{Config, FileWalker, load_config};
 pub use parsers::{PythonExtractor, RustExtractor, SymbolExtractor};
 
