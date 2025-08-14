@@ -187,11 +187,11 @@ pub fn run(args: ContextArgs, ctx: &AppContext) -> Result<()> {
         let in_scope = in_anchor_dir(&root, anchor_file, p.file.as_path());
 
         let pr = if is_anchor {
-            Priority::High
+            Priority::high()
         } else if in_scope {
-            Priority::Medium
+            Priority::medium()
         } else {
-            Priority::Low
+            Priority::low()
         };
 
         items.push(Item {
@@ -208,7 +208,7 @@ pub fn run(args: ContextArgs, ctx: &AppContext) -> Result<()> {
     let mut all_items = vec![Item {
         id: "__template__".into(),
         content: header,
-        priority: Priority::High,
+        priority: Priority::high(),
         hard: true,
         min_tokens: 80,
     }];

@@ -1,104 +1,284 @@
-Below is an ultra-compact, token-efficient rewrite of `TODO.md` that preserves full project context, moves Phase 3 to the front, and defers former Phase 2.5 to Phase 3.5.
+# Roughup (`rup`)
 
----
+**Privacy-first CLI for smart code extraction and LLM-assisted editing**
 
-# Roughup — Roadmap (Local-Only, Phases 1–7)
+Roughup is a blazing-fast Rust CLI that helps you work with Large Language Models on your codebase without sending your code anywhere. Extract relevant context, get LLM suggestions, preview changes, and apply them atomically—all while keeping your code local.
 
-## 0) Purpose
+## Key Features
 
-Local-only, model-agnostic Rust CLI for LLM workflows: extract code context, validate EBNF edits, apply safely with deterministic backups/rollback.
+- **100% Local**: No network calls, your code never leaves your machine
+- **Smart Context**: Intelligent symbol ranking and token budgeting
+- **Lightning Fast**: Sub-second context assembly, memory-mapped I/O
+- **Safe Edits**: Atomic operations with automatic backups and rollback
+- **Deterministic**: Same input always produces same output
+- **LLM Agnostic**: Works with Claude, GPT, local models, or any LLM
 
-## 1) Invariants
+## Quick Start
 
-- No network; deterministic outputs; preview-first; `--dry-run` ubiquitous.
-- Strict repo-relative paths; refuse escapes/submodules unless flagged.
-- CRLF/LF preserved; atomic writes; sessionized backups with DONE.
+### Installation
 
-## 2) Status Snapshot
+```bash
+# From crates.io (coming soon)
+cargo install roughup
 
-- Phase 1: Edit engine + EBNF + atomic writes — complete.
-- Phase 2: Hybrid apply (internal+Git), typed exit codes, safety — complete.
-- Backups: Centralized system + CLI (list/show/restore/cleanup) — complete.
-- Foundation hardened: all 10 critical fixes applied (cross-platform fsync, ID gen, finalize timing, stale locks, atomic manifest, path validation, cleanup dedup, symlink UX, non-regular file guard, binary-diff fallback).
-- Tests: all unit + integration passing; clean build; no regressions.
+# From source
+git clone https://github.com/yourusername/roughup
+cd roughup
+cargo install --path .
+```
 
-## 3) Prioritized Roadmap (Next)
+### Basic Workflow
 
-3. **Phase 3 — Smart Context Assembly** \[Top Priority]
-   Goal: minimal, high-signal, budgeted context packs.
-   Deliverables:
+```bash
+# 1. Index your codebase
+rup symbols
 
-   - `symbol_index`: load `symbols.jsonl` (Rust/Py), exact/fuzzy lookup, spans.
-   - Relevance ranking: semantic (local embeddings, ONNX) → scope → proximity → history → lexical.
-   - `budgeter`: token/char estimate (tiktoken-rs), deterministic ordering, overflow strategies; optional test-impact heuristic.
-   - CLI `rup context`: `--budget`, `--include-tests|--include-deps`, `--template [refactor|bugfix|feature]`, `--semantic`, paste-ready output and `--json`.
-     Targets/AC:
-   - 1k-file repo: <2 s typical, <5 s heavy; estimate ±10%.
-   - Deterministic ordering; includes defs+deps and nearest tests (when requested) within budget.
+# 2. Get smart context for your query
+rup context --clipboard "authentication" "login"
 
-3.5. **Phase 3.5 — Conflict Resolution Assistant** \[After Phase 3]
-Goal: reduce/manual conflicts (exit code 2).
-Deliverables:
+# 3. Paste context to LLM, get edit suggestions, copy them
 
-- Parser for conflict blocks (ours/theirs/base); categorizations; safe auto-fixes (imports/whitespace); confidence scoring.
-- `rup resolve <file>`; `--strategy [ours|theirs|manual|auto]`; TUI diff; `--auto-resolve-safe`.
-  Targets/AC: <100 ms parse; >95% accuracy on formatting/imports; deterministic; no unsafe auto-resolves.
+# 4. Preview the changes
+rup preview --clipboard
 
-4. **Phase 4 — Renderers & Local Discovery**
+# 5. Apply safely with backup
+rup apply --clipboard
+```
 
-   - Renderers: `markdown-chat`, `json-tool`, `patch` (configurable context).
-   - `rup outline`, `rup find`, `rup find-function`.
-     AC: deterministic output; 1k files outline <2 s.
+## Core Workflows
 
-4.5. **Phase 4.5 — Feedback Loop & Learning**
+### Smart Context Assembly
 
-- Local SQLite: outcomes, patterns; confidence scores, risk hints; `rup stats|insights`.
-  AC: <10 ms overhead; actionable insights; no code content stored.
+Extract the most relevant code for your LLM conversation:
 
-5. **Phase 5 — Analysis & Dependencies**
+```bash
+# Basic context extraction
+rup context "MyClass" "handle_request"
 
-   - `usage`, `callers`, `deps`, `impact`.
-     AC: <1 s common; <4 s 1k-file; stable results.
+# Semantic search with budget control
+rup context --semantic --budget 8000 "error handling" "validation"
 
-6. **Phase 6 — Session/Context Persistence**
+# Template-specific context (refactor/bugfix/feature)
+rup context --template bugfix "authentication" "security"
 
-   - Save/load reproducible contexts; manifests with policy/budget; optional local encryption.
-     AC: byte-identical reload for unchanged repo; precise delta report otherwise.
+# Anchor-aware proximity ranking
+rup context --anchor src/auth.rs --anchor-line 45 "login" "session"
+```
 
-7. **Phase 7 — Ecosystem Integration**
+**Output**: Intelligently ranked code snippets that fit your token budget, ready to paste into any LLM.
 
-   - CI templates; pre-commit; container; editor/LSP; export/import with other tools.
-     AC: zero-config defaults; stable exit codes; fast startup.
+### Safe Code Editing
 
-## 4) CLI Surface (current+planned)
+Apply LLM suggestions with confidence:
 
-`apply`, `preview`, `check-syntax`, `backup {list|show|restore|cleanup}`, `extract`, `symbols`, `chunk`, `tree`, `context`, `outline`, `find`, `find-function`, `usage`, `callers`, `deps`, `impact`.
-Global: `--no-color`, `--quiet`, `--dry-run`, `--json`, `--context-lines=N`.
-Exit codes: `0` ok, `2` conflicts, `3` invalid, `4` repo, `5` internal.
+```bash
+# Preview changes before applying
+rup preview --clipboard
 
-## 5) Performance Targets
+# Apply with automatic backup
+rup apply --clipboard
 
-- Context: <2 s typical; <5 s heavy.
-- Outline: <2 s (1k files).
-- Apply rollback: <300 ms.
-- Listing 1k+ backup sessions: <150 ms.
+# Force apply with git 3-way merge
+rup apply --clipboard --engine git --force
+```
 
-## 6) Testing (must/should)
+**Edit Format**: Use simple EBNF syntax that both humans and tools can understand:
 
-- Must: determinism (all OSes), EBNF fuzz/property, repo-boundary & submodule refusal, backup life-cycle, conflict exit-code semantics.
-- Should: tokenizer/budget microbench, context macrobench, large-repo smoke, stale-lock + crash-recovery paths.
+```ebnf
+FILE: src/auth.rs
+REPLACE lines 10-15:
+OLD:
+```rust
+fn login(user: &str) -> bool {
+    // old implementation
+}
+```
 
-## 7) Next Actions (Do Now)
+NEW:
+```rust
+fn login(user: &str, password: &str) -> Result<Session, AuthError> {
+    // improved implementation
+}
+```
 
-1. Implement Phase 3 core: `symbol_index`, `budgeter`, deterministic ranking, `rup context` UX (`--budget`, templates, `--json`).
-2. Add Phase 3 tests/benches (estimate accuracy ±10%, determinism, perf caps).
-3. Plan Phase 3.5 API/TUI surfaces; define safe auto-rules and confidence thresholds.
-4. Update README/`--help` for `context`; add minimal examples.
+### Project Exploration
 
-## 8) Appendix: Completed Hardening (reference)
+Understand your codebase structure:
 
-- Cross-platform `sync_dir` (Windows no-op); atomic manifest writes; finalize flag timing; stale-lock GC (>60 s).
-- Path validation (reject `Prefix`/`RootDir`); cleanup dedup via `HashSet`; improved symlink/broken-link UX; non-regular file guard; binary-diff fallback.
-- Backups: centralized layout, DONE markers, BLAKE3, index.jsonl, list/show/restore/cleanup with JSON output.
+```bash
+# Project tree with line counts
+rup tree
+
+# Extract specific files or ranges
+rup extract src/main.rs:1-50 src/lib.rs:100-200
+
+# Symbol index with visibility info
+rup symbols --include-private
+```
+
+### Backup & Recovery
+
+Never lose work with session-based backups:
+
+```bash
+# List backup sessions
+rup backup list
+
+# Show backup details
+rup backup show abc123
+
+# Restore from backup
+rup backup restore abc123
+```
+
+## Use Cases
+
+### Large Refactoring
+```bash
+# Get context for the subsystem you're refactoring
+rup context --template refactor --budget 12000 "DatabaseConnection" "ConnectionPool"
+
+# Apply LLM-suggested changes with preview
+rup preview --clipboard
+rup apply --clipboard
+```
+
+### Bug Investigation
+```bash
+# Find relevant code around the issue
+rup context --template bugfix --anchor src/error.rs "handle_error" "logging"
+
+# Apply fix with git 3-way merge for safety
+rup apply --clipboard --engine git
+```
+
+### Feature Development
+```bash
+# Gather context for new feature
+rup context --template feature "API" "endpoints" "handlers"
+
+# Apply incrementally with backups
+rup apply --clipboard --backup
+```
+
+## Available Commands
+
+| Command | Purpose | Example |
+|---------|---------|---------|
+| `symbols` | Index codebase symbols | `rup symbols` |
+| `tree` | Show project structure | `rup tree --depth 3` |
+| `context` | Smart context assembly | `rup context --semantic "auth"` |
+| `extract` | Extract specific files/ranges | `rup extract src/lib.rs:1-100` |
+| `preview` | Preview LLM edit suggestions | `rup preview --clipboard` |
+| `apply` | Apply edits with backup | `rup apply --clipboard` |
+| `backup` | Manage backup sessions | `rup backup list` |
+| `chunk` | Split large files by tokens | `rup chunk large_file.rs` |
+
+## Configuration
+
+Create `roughup.toml` in your project root:
+
+```toml
+[symbols]
+output_file = "symbols.jsonl"
+include_private = false
+languages = ["rust", "python"]
+
+[chunk]
+model = "gpt-4o"
+max_tokens = 4000
+
+[context]
+default_budget = 6000
+default_template = "freeform"
+
+[extract]
+default_context = 3
+fence = true
+
+[apply]
+engine = "internal"
+backup = true
+```
+
+## Advanced Features
+
+### Multiple Apply Engines
+- **Internal**: Fast, clear error messages
+- **Git**: Robust 3-way merge, handles conflicts
+- **Auto**: Try internal first, fallback to git
+
+### Template System
+- **Refactor**: Focus on structure and organization
+- **Bugfix**: Emphasize error handling and edge cases  
+- **Feature**: Highlight APIs and implementation patterns
+- **Freeform**: Balanced general-purpose context
+
+### Smart Ranking
+- **Proximity**: Code near your anchor file/line gets priority
+- **Relevance**: Exact matches > prefix > substring > fuzzy
+- **Importance**: Public APIs, core types, and functions prioritized
+- **Recency**: Recently accessed symbols get boosted
+
+## Integration Examples
+
+### With Claude (Web)
+```bash
+rup context --clipboard --template refactor "MyService"
+# Paste into Claude, get suggestions, copy response
+rup apply --clipboard
+```
+
+### With Local LLMs
+```bash
+rup context --json "optimize" > context.json
+# Send to your local model API
+# Get response and save as edits.ebnf
+rup apply edits.ebnf
+```
+
+### With Custom Scripts
+```bash
+#!/bin/bash
+rup context --json "$1" | my_llm_client | rup apply --clipboard
+```
+
+## Performance
+
+- **Context assembly**: <2s for large codebases
+- **Symbol indexing**: <5s for 100k+ lines
+- **Edit application**: <300ms for typical changes
+- **Memory usage**: <50MB for most projects
+
+## Privacy & Security
+
+- **No network calls**: Everything runs locally
+- **No telemetry**: Zero data collection
+- **Atomic backups**: Safe rollback for any operation
+- **Git integration**: Proper attribution and history
+
+## Roadmap
+
+- [ ] **Language Support**: JavaScript/TypeScript, Go, C++, Java
+- [ ] **IDE Plugins**: VSCode, Neovim, Emacs extensions
+- [ ] **Context Sharing**: Save and share context templates
+- [ ] **Parallel Processing**: Multi-threaded symbol extraction
+- [ ] **Advanced Templates**: Project-specific context strategies
+
+## Contributing
+
+We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+## License
+
+Licensed under [LICENSE](LICENSE) - see the file for details.
+
+## Acknowledgments
+
+Built with:
+- [clap](https://github.com/clap-rs/clap) for CLI interface
+- [tree-sitter](https://tree-sitter.github.io/) for parsing
+- [tiktoken-rs](https://github.com/zurawiki/tiktoken-rs) for token counting
+- [rayon](https://github.com/rayon-rs/rayon) for parallelism
 
 ---

@@ -154,3 +154,99 @@ fn test_budget_trimming_deterministic() {
     // Compare exact bytes for determinism.
     assert_eq!(a, b, "trimming must be stable across runs");
 }
+
+#[test]
+fn test_enhanced_priority_system() {
+    use roughup::core::budgeter::{ContextFactors, SymbolRanker};
+    use roughup::core::symbols::{Symbol, SymbolKind, Visibility};
+    use std::path::PathBuf;
+
+    // Create test symbol
+    let symbol = Symbol {
+        file: PathBuf::from("src/lib.rs"),
+        lang: "rust".to_string(),
+        kind: SymbolKind::Function,
+        name: "test_function".to_string(),
+        qualified_name: "module::test_function".to_string(),
+        byte_start: 100,
+        byte_end: 200,
+        start_line: 10,
+        end_line: 15,
+        visibility: Some(Visibility::Public),
+        doc: None,
+    };
+
+    let anchor = PathBuf::from("src/lib.rs");
+    let ranker = SymbolRanker::new(Some(&anchor), Some(10));
+    let factors = ContextFactors::default();
+
+    let priority = ranker.calculate_priority(&symbol, "test_function", &factors);
+
+    // Should have high relevance due to exact match
+    assert_eq!(priority.relevance, 1.0);
+
+    // Should have high proximity due to same file and line
+    assert!(priority.proximity > 0.4);
+
+    // Should have elevated level due to public function in anchor file
+    assert!(priority.level > 100);
+}
+
+#[test]
+fn test_priority_backward_compatibility() {
+    use roughup::core::budgeter::Priority;
+
+    let high = Priority::high();
+    let medium = Priority::medium();
+    let low = Priority::low();
+
+    // Test backward compatibility conversion
+    let high_u8: u8 = high.into();
+    let medium_u8: u8 = medium.into();
+    let low_u8: u8 = low.into();
+
+    assert_eq!(high_u8, 2);
+    assert_eq!(medium_u8, 1);
+    assert_eq!(low_u8, 0);
+
+    // Test ordering is preserved (now deterministic with total_cmp)
+    assert!(high > medium);
+    assert!(medium > low);
+}
+
+#[test]
+fn test_deterministic_ordering() {
+    use roughup::core::budgeter::Priority;
+
+    let p1 = Priority::custom(100, 0.5, 0.5);
+    let p2 = Priority::custom(100, 0.5, 0.5);
+
+    // Equal priorities should compare as equal
+    assert_eq!(p1.cmp(&p2), std::cmp::Ordering::Equal);
+
+    // Test NaN safety
+    let p_nan = Priority::custom(100, f32::NAN, 0.5);
+    assert!(!p_nan.relevance.is_nan()); // Should be sanitized to 0.0
+}
+
+#[test]
+fn test_budget_expansion_hard_items() {
+    use roughup::core::budgeter::{Budgeter, Item, Priority};
+
+    let budgeter = Budgeter::new("gpt-4o").unwrap();
+
+    // Hard item with small min_tokens but large full content
+    let hard_item = Item {
+        id: "hard1".to_string(),
+        content: "fn test() {\n    // This is a longer function with more content\n    println!(\"hello\");\n    println!(\"world\");\n}".to_string(),
+        priority: Priority::high(),
+        hard: true,
+        min_tokens: 5, // Very small minimum
+    };
+
+    let budget = 100; // Enough to expand
+    let result = budgeter.fit(vec![hard_item], budget).unwrap();
+
+    // Hard item should expand beyond min_tokens when budget allows
+    assert!(result.items[0].tokens > 5);
+}

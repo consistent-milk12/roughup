@@ -81,9 +81,9 @@ pub fn run(args: ExtractArgs, ctx: &AppContext) -> Result<()> {
                 id,
                 content: snippet,
                 priority: if s.hard {
-                    Priority::High
+                    Priority::high()
                 } else {
-                    Priority::Medium
+                    Priority::medium()
                 },
                 hard: s.hard,
                 min_tokens,

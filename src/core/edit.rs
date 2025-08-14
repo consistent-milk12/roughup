@@ -460,39 +460,91 @@ impl EditEngine {
         let (start_line, end_line) = self.parse_span(span_part)?;
         *i += 1;
 
-        // Allow optional blank lines before OLD:
-        while *i < lines.len() && lines[*i].trim().is_empty() {
-            *i += 1;
+        // Local helpers so we don't rely on a strict fenced-only parser.
+        fn is_marker(s: &str, needle: &str) -> bool {
+            s.trim_start().starts_with(needle)
         }
 
-        // Helper: strip ``` fences (with optional language) from a captured block
-        fn strip_fences(s: &str) -> String {
-            // Keep original newlines except CR, which we normalize elsewhere
-            let raw = s.trim_end_matches('\n');
-            let parts: Vec<&str> = raw.lines().collect();
+        fn is_any_op_start(s: &str) -> bool {
+            let t = s.trim_start();
+            t.starts_with("FILE:")
+                || t.starts_with("REPLACE lines")
+                || t.starts_with("INSERT at")
+                || t.starts_with("DELETE lines")
+                || t.starts_with("GUARD-CID:")
+                || t.starts_with("OLD:")
+                || t.starts_with("NEW:")
+        }
+        fn strip_crlf(s: &str) -> String {
+            s.replace('\r', "")
+        }
 
-            if parts
-                .first()
-                .map(|l| l.trim_start().starts_with("```"))
-                .unwrap_or(false)
-                && parts
-                    .last()
-                    .map(|l| l.trim_start().starts_with("```"))
-                    .unwrap_or(false)
-                && parts.len() >= 2
-            {
-                return parts[1..parts.len() - 1].join("\n");
+        // Read a content block following the given marker.
+        fn read_block(lines: &[&str], i: &mut usize, marker: &str) -> Result<String, ParseError> {
+            if *i >= lines.len() || !is_marker(lines[*i], marker) {
+                return Err(ParseError::InvalidOperation(format!(
+                    "Expected {} at line {}",
+                    marker,
+                    *i + 1
+                )));
+            }
+            // Consume the marker line.
+            *i += 1;
+
+            // Optional single blank line after marker.
+            if *i < lines.len() && lines[*i].trim().is_empty() {
+                *i += 1;
             }
 
-            raw.to_string()
+            // EOF ⇒ empty block.
+            if *i >= lines.len() {
+                return Ok(String::new());
+            }
+
+            // Fenced?
+            let mut body: Vec<String> = Vec::new();
+            let t = lines[*i].trim_start();
+            if t.starts_with("```") {
+                // Consume opening fence.
+                *i += 1;
+                // Collect until closing fence.
+                while *i < lines.len() {
+                    let ln = lines[*i];
+                    if ln.trim_start().starts_with("```") {
+                        // Consume closing fence and stop.
+                        *i += 1;
+                        break;
+                    } else {
+                        body.push(ln.to_string());
+                        *i += 1;
+                    }
+                }
+                // If EOF without closing fence, we still accept what we have.
+                return Ok(strip_crlf(&body.join("\n")));
+            }
+
+            // Unfenced:
+            // OLD: stops at the next NEW:; NEW: stops at the next op/file marker.
+            while *i < lines.len() {
+                let ln = lines[*i];
+                let t = ln.trim_start();
+
+                if marker == "OLD:" && t.starts_with("NEW:") {
+                    break;
+                }
+                if marker == "NEW:" && is_any_op_start(ln) {
+                    break;
+                }
+
+                body.push(ln.to_string());
+                *i += 1;
+            }
+
+            Ok(strip_crlf(&body.join("\n")))
         }
 
-        // Parse content blocks, then normalize
-        let old_raw = self.parse_content_block(lines, i, "OLD:")?;
-        let new_raw = self.parse_content_block(lines, i, "NEW:")?;
-
-        let old_content = strip_fences(&old_raw).replace('\r', "");
-        let new_content = strip_fences(&new_raw).replace('\r', "");
+        let old_content = read_block(lines, i, "OLD:")?;
+        let new_content = read_block(lines, i, "NEW:")?;
 
         Ok(Some(EditOperation::Replace {
             start_line,
@@ -600,52 +652,85 @@ impl EditEngine {
         }
     }
 
-    /// Parse content block (OLD:/NEW: followed by fenced code)
+    /// Parse content block after `OLD:` or `NEW:`.
+    /// Accepts:
+    ///   - optional blank line after the marker
+    ///   - fenced body (``` or ```lang … ```), or
+    ///   - unfenced body (terminated by the next marker)
     fn parse_content_block(
         &self,
         lines: &[&str],
         i: &mut usize,
         header: &str,
     ) -> Result<String, ParseError> {
+        // Expect the header at the current line.
         if *i >= lines.len() || !lines[*i].trim().starts_with(header) {
             return Err(ParseError::MissingField(header.to_string()));
         }
+        // Consume the header line.
         *i += 1;
 
-        // Look for fenced code block
-        let fence_line = lines[*i].trim();
-        if !fence_line.starts_with("```") {
-            return Err(ParseError::InvalidOperation(format!(
-                "Expected fenced code block after {}",
-                header
-            )));
-        }
-
-        // Count leading backticks in the opening fence (supports 3+)
-        let fence_len = fence_line.chars().take_while(|&c| c == '`').count();
-        let closing = "`".repeat(fence_len);
-        *i += 1;
-
-        // Collect content until matching fence run is found
-        let mut content_lines = Vec::new();
-        let mut closed = false;
-        while *i < lines.len() {
-            let line = lines[*i];
-            if line.trim() == closing {
-                *i += 1;
-                closed = true;
-                break;
-            }
-            content_lines.push(line);
+        // Optional single blank line after the header.
+        if *i < lines.len() && lines[*i].trim().is_empty() {
             *i += 1;
         }
-        if !closed {
-            return Err(ParseError::InvalidOperation(format!(
-                "Unterminated fenced block after {}",
-                header
-            )));
+
+        // EOF ⇒ empty block.
+        if *i >= lines.len() {
+            return Ok(String::new());
         }
-        Ok(content_lines.join("\n"))
+
+        // Helper to detect the start of another directive/file block.
+        fn is_any_op_start(s: &str) -> bool {
+            let t = s.trim_start();
+            t.starts_with("FILE:")
+                || t.starts_with("REPLACE lines")
+                || t.starts_with("INSERT at")
+                || t.starts_with("DELETE lines")
+                || t.starts_with("GUARD-CID:")
+                || t.starts_with("OLD:")
+                || t.starts_with("NEW:")
+        }
+
+        // If next line is a fence, read fenced body.
+        let next_trim = lines[*i].trim_start();
+        if next_trim.starts_with("```") {
+            // Opening fence; allow language tag.
+            let fence_line = lines[*i].trim();
+            let fence_len = fence_line.chars().take_while(|&c| c == '`').count();
+            let closing = "`".repeat(fence_len);
+            *i += 1;
+
+            let mut content_lines = Vec::new();
+            while *i < lines.len() {
+                let ln = lines[*i];
+                let t = ln.trim_start();
+                // Close on a line that begins with the same number of backticks.
+                if t.starts_with(&closing) && t.chars().all(|c| c == '`' || c.is_whitespace()) {
+                    *i += 1; // consume closing fence
+                    break;
+                }
+                content_lines.push(ln.to_string());
+                *i += 1;
+            }
+            return Ok(content_lines.join("\n").replace('\r', ""));
+        }
+
+        // Otherwise, read an unfenced body to the next marker.
+        let mut body = Vec::new();
+        while *i < lines.len() {
+            let ln = lines[*i];
+            let t = ln.trim_start();
+            if header == "OLD:" && t.starts_with("NEW:") {
+                break; // OLD ends where NEW begins
+            }
+            if header == "NEW:" && is_any_op_start(ln) {
+                break; // NEW ends at the next directive or FILE
+            }
+            body.push(ln.to_string());
+            *i += 1;
+        }
+        Ok(body.join("\n").replace('\r', ""))
     }
 
     /// Apply edit specification
