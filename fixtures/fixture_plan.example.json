@@ -1,0 +1,35 @@
+{
+  "encoding": "o200k_base",
+  "scenarios": [
+    {
+      "name": "tierA_probe_rust",
+      "fixture_path": "./",
+      "queries": ["f_"],
+      "tier": "A",
+      "budget": null,
+      "probe_first": true,
+      "runs": [{ "args": ["--tier", "A", "--json"], "label": "probe" }]
+    },
+    {
+      "name": "tierB_repeat_determinism",
+      "fixture_path": "./",
+      "queries": ["f_"],
+      "tier": "B",
+      "budget": null,
+      "probe_first": false,
+      "runs": [
+        { "args": ["--tier", "B", "--json"], "label": "first" },
+        { "args": ["--tier", "B", "--json"], "label": "second" }
+      ]
+    },
+    {
+      "name": "explicit_budget_180",
+      "fixture_path": "./",
+      "queries": ["f_"],
+      "tier": null,
+      "budget": 180,
+      "probe_first": false,
+      "runs": [{ "args": ["--budget", "180", "--json"], "label": "tight" }]
+    }
+  ]
+}

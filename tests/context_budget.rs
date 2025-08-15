@@ -2,37 +2,42 @@
 // respects the requested cap and trims deterministically.
 // We validate by observing JSON counters and by comparing the
 // number of returned items under small vs. large budgets.
+use std::process::Command;
+
 use assert_cmd::prelude::*;
 use assert_fs::prelude::*;
 use serde_json::Value;
-use std::process::Command;
 
 // Create a larger fixture to force trimming at small budgets.
 // We synthesize multiple moderately sized files to exceed tight
 // budgets in a predictable way.
-fn make_heavy_fixture() -> assert_fs::TempDir {
+fn make_heavy_fixture() -> assert_fs::TempDir
+{
     // Initialize the temporary project root.
     let tmp = assert_fs::TempDir::new().expect("tempdir");
 
     // Generate several Rust files with repeated content lines to
     // inflate size while keeping parsing simple and stable.
-    for i in 0..8 {
+    for i in 0..8
+    {
         // Compose a path like src/unit_i.rs for each file.
         let p = format!("src/unit_{i}.rs");
 
         // Generate repeated functions to approximate token load.
         let mut body = String::new();
 
-        for j in 0..50 {
+        for j in 0..50
+        {
             // Add content that is code-like to simulate sources.
             body.push_str(&format!(
-                "/// unit {i} fn {j}\n\
-                 pub fn f_{i}_{j}() {{ /* body */ }}\n"
+                "/// unit {i} fn {j}\npub fn f_{i}_{j}() {{ /* body */ }}\n"
             ));
         }
 
         // Write the file into the fixture.
-        tmp.child(&p).write_str(&body).expect("write");
+        tmp.child(&p)
+            .write_str(&body)
+            .expect("write");
     }
 
     // Include a root README to vary file types.
@@ -46,7 +51,11 @@ fn make_heavy_fixture() -> assert_fs::TempDir {
 
 // Helper: run context with a budget and parse JSON output to a
 // serde_json::Value for downstream assertions.
-fn run_with_budget(dir: &assert_fs::TempDir, budget: u32) -> Value {
+fn run_with_budget(
+    dir: &assert_fs::TempDir,
+    budget: u32,
+) -> Value
+{
     // First create symbols index
     Command::cargo_bin("rup")
         .expect("bin")
@@ -78,7 +87,8 @@ fn run_with_budget(dir: &assert_fs::TempDir, budget: u32) -> Value {
 // Test: smaller budgets must not exceed the requested cap and
 // should include fewer items than larger budgets.
 #[test]
-fn test_budget_enforcement_and_trimming() {
+fn test_budget_enforcement_and_trimming()
+{
     // Build a heavy fixture that will trigger trimming.
     let tmp = make_heavy_fixture();
 
@@ -89,8 +99,16 @@ fn test_budget_enforcement_and_trimming() {
     let large = run_with_budget(&tmp, 2000);
 
     // Extract items arrays for both runs.
-    let small_items = small.get("items").unwrap().as_array().unwrap();
-    let large_items = large.get("items").unwrap().as_array().unwrap();
+    let small_items = small
+        .get("items")
+        .unwrap()
+        .as_array()
+        .unwrap();
+    let large_items = large
+        .get("items")
+        .unwrap()
+        .as_array()
+        .unwrap();
 
     // Ensure the larger budget yields at least as many items.
     assert!(
@@ -99,7 +117,10 @@ fn test_budget_enforcement_and_trimming() {
     );
 
     // If the schema reports total_tokens, assert it respects cap.
-    if let Some(tt) = small.get("total_tokens").and_then(|v| v.as_u64()) {
+    if let Some(tt) = small
+        .get("total_tokens")
+        .and_then(|v| v.as_u64())
+    {
         // Expect the reported token count to be <= requested cap.
         assert!(
             tt <= 200,
@@ -111,7 +132,8 @@ fn test_budget_enforcement_and_trimming() {
 // Test: trimming must be deterministic — two runs at the same
 // small budget should return identical JSON payloads.
 #[test]
-fn test_budget_trimming_deterministic() {
+fn test_budget_trimming_deterministic()
+{
     // Create heavy test fixture content.
     let tmp = make_heavy_fixture();
 
@@ -156,10 +178,14 @@ fn test_budget_trimming_deterministic() {
 }
 
 #[test]
-fn test_enhanced_priority_system() {
-    use roughup::core::budgeter::{ContextFactors, SymbolRanker};
-    use roughup::core::symbols::{Symbol, SymbolKind, Visibility};
+fn test_enhanced_priority_system()
+{
     use std::path::PathBuf;
+
+    use roughup::core::{
+        budgeter::{ContextFactors, SymbolRanker},
+        symbols::{Symbol, SymbolKind, Visibility},
+    };
 
     // Create test symbol
     let symbol = Symbol {
@@ -193,7 +219,8 @@ fn test_enhanced_priority_system() {
 }
 
 #[test]
-fn test_priority_backward_compatibility() {
+fn test_priority_backward_compatibility()
+{
     use roughup::core::budgeter::Priority;
 
     let high = Priority::high();
@@ -215,7 +242,8 @@ fn test_priority_backward_compatibility() {
 }
 
 #[test]
-fn test_deterministic_ordering() {
+fn test_deterministic_ordering()
+{
     use roughup::core::budgeter::Priority;
 
     let p1 = Priority::custom(100, 0.5, 0.5);
@@ -226,11 +254,16 @@ fn test_deterministic_ordering() {
 
     // Test NaN safety
     let p_nan = Priority::custom(100, f32::NAN, 0.5);
-    assert!(!p_nan.relevance.is_nan()); // Should be sanitized to 0.0
+    assert!(
+        !p_nan
+            .relevance
+            .is_nan()
+    ); // Should be sanitized to 0.0
 }
 
 #[test]
-fn test_budget_expansion_hard_items() {
+fn test_budget_expansion_hard_items()
+{
     use roughup::core::budgeter::{Budgeter, Item, Priority};
 
     let budgeter = Budgeter::new("gpt-4o").unwrap();
@@ -238,14 +271,18 @@ fn test_budget_expansion_hard_items() {
     // Hard item with small min_tokens but large full content
     let hard_item = Item {
         id: "hard1".to_string(),
-        content: "fn test() {\n    // This is a longer function with more content\n    println!(\"hello\");\n    println!(\"world\");\n}".to_string(),
+        content: "fn test() {\n    // This is a longer function with more content\n    \
+                  println!(\"hello\");\n    println!(\"world\");\n}"
+            .to_string(),
         priority: Priority::high(),
         hard: true,
         min_tokens: 5, // Very small minimum
     };
 
     let budget = 100; // Enough to expand
-    let result = budgeter.fit(vec![hard_item], budget).unwrap();
+    let result = budgeter
+        .fit(vec![hard_item], budget)
+        .unwrap();
 
     // Hard item should expand beyond min_tokens when budget allows
     assert!(result.items[0].tokens > 5);

@@ -1,9 +1,52 @@
+use std::{path::PathBuf, str::FromStr};
+
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use std::path::PathBuf;
+
+/// Tier presets for context assembly (A≈1200, B≈3000, C≈6000 tokens)
+/// Accepts A, B, C (case-insensitive) for easy command-line usage
+#[derive(Clone, Debug)]
+pub enum TierArg
+{
+    /// Smallest preset (~1200 tokens budget) - recommended first step
+    A,
+    /// Medium preset (~3000 tokens budget) - when model needs more spans
+    B,
+    /// Large preset (~6000 tokens budget) - comprehensive context
+    C,
+}
+
+/// Implement tolerant parser so users can pass a/B/c without case sensitivity
+impl FromStr for TierArg
+{
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err>
+    {
+        let k = s.trim();
+        // Match ignoring case on single-letter codes
+        if k.eq_ignore_ascii_case("a")
+        {
+            Ok(TierArg::A)
+        }
+        else if k.eq_ignore_ascii_case("b")
+        {
+            Ok(TierArg::B)
+        }
+        else if k.eq_ignore_ascii_case("c")
+        {
+            Ok(TierArg::C)
+        }
+        else
+        {
+            Err(format!("invalid tier: {s} (use A, B, or C)"))
+        }
+    }
+}
 
 /// Shared application context for global flags
 #[derive(Clone, Debug)]
-pub struct AppContext {
+pub struct AppContext
+{
     pub quiet: bool,    // global --quiet
     pub no_color: bool, // global --no-color
     pub dry_run: bool,  // global --dry-run
@@ -12,10 +55,12 @@ pub struct AppContext {
 #[derive(Parser)]
 #[command(name = "roughup")]
 #[command(
-    about = "A super-fast, lightweight CLI for extracting and packaging source code for LLM workflows"
+    about = "A super-fast, lightweight CLI for extracting and packaging source code for LLM \
+             workflows"
 )]
 #[command(version, long_about = None)]
-pub struct Cli {
+pub struct Cli
+{
     #[command(subcommand)]
     pub command: Commands,
 
@@ -33,7 +78,8 @@ pub struct Cli {
 }
 
 #[derive(Subcommand)]
-pub enum Commands {
+pub enum Commands
+{
     /// Extract specific line ranges from files
     Extract(ExtractArgs),
 
@@ -72,7 +118,8 @@ pub enum Commands {
 }
 
 #[derive(Parser)]
-pub struct ExtractArgs {
+pub struct ExtractArgs
+{
     /// Files and line ranges (format: file.rs:10-20,25-30)
     pub targets: Vec<String>,
 
@@ -118,7 +165,8 @@ pub struct ExtractArgs {
 }
 
 #[derive(Parser)]
-pub struct TreeArgs {
+pub struct TreeArgs
+{
     /// Root directory to scan
     #[arg(default_value = ".")]
     pub path: PathBuf,
@@ -133,7 +181,8 @@ pub struct TreeArgs {
 }
 
 #[derive(Debug, Parser)]
-pub struct SymbolsArgs {
+pub struct SymbolsArgs
+{
     /// Root directory to scan
     #[arg(default_value = ".")]
     pub path: PathBuf,
@@ -152,7 +201,8 @@ pub struct SymbolsArgs {
 }
 
 #[derive(Parser)]
-pub struct ChunkArgs {
+pub struct ChunkArgs
+{
     /// Input file to chunk
     pub input: PathBuf,
 
@@ -179,14 +229,16 @@ pub struct ChunkArgs {
 }
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
-pub enum MatchMode {
+pub enum MatchMode
+{
     Line,
     Token,
     Auto,
 }
 
 #[derive(Parser)]
-pub struct ApplyArgs {
+pub struct ApplyArgs
+{
     /// Edit specification file to apply
     pub edit_file: Option<PathBuf>,
 
@@ -222,7 +274,8 @@ pub struct ApplyArgs {
     #[arg(long)]
     pub verbose: bool,
 
-    /// Apply engine: internal (fast, clear errors), git (robust, 3-way merge), auto (fallback)
+    /// Apply engine: internal (fast, clear errors), git (robust, 3-way merge), auto
+    /// (fallback)
     #[arg(long, default_value = "internal")]
     pub engine: ApplyEngine,
 
@@ -248,7 +301,8 @@ pub struct ApplyArgs {
 }
 
 #[derive(Debug, Clone, ValueEnum)]
-pub enum ApplyEngine {
+pub enum ApplyEngine
+{
     /// Fast internal engine with clear error messages
     Internal,
     /// Git apply engine with 3-way merge capability  
@@ -258,7 +312,8 @@ pub enum ApplyEngine {
 }
 
 #[derive(Debug, Clone, ValueEnum)]
-pub enum GitMode {
+pub enum GitMode
+{
     /// 3-way merge (resilient, may leave conflict markers)
     #[value(name = "3way")]
     ThreeWay,
@@ -270,7 +325,8 @@ pub enum GitMode {
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
-pub enum WhitespaceMode {
+pub enum WhitespaceMode
+{
     /// Ignore whitespace issues
     Nowarn,
     /// Warn about whitespace issues
@@ -280,7 +336,8 @@ pub enum WhitespaceMode {
 }
 
 #[derive(Parser)]
-pub struct PreviewArgs {
+pub struct PreviewArgs
+{
     /// Edit specification file to preview
     pub edit_file: Option<PathBuf>,
 
@@ -300,7 +357,8 @@ pub struct PreviewArgs {
     #[arg(long)]
     pub repo_root: Option<PathBuf>,
 
-    /// Apply engine: internal (fast, clear errors), git (robust, 3-way merge), auto (fallback)
+    /// Apply engine: internal (fast, clear errors), git (robust, 3-way merge), auto
+    /// (fallback)
     #[arg(long, default_value = "internal")]
     pub engine: ApplyEngine,
 
@@ -321,19 +379,22 @@ pub struct PreviewArgs {
     pub context_lines: usize,
 }
 #[derive(Parser)]
-pub struct CheckSyntaxArgs {
+pub struct CheckSyntaxArgs
+{
     /// Edit specification file to validate
     pub edit_file: PathBuf,
 }
 
 #[derive(Parser)]
-pub struct BackupArgs {
+pub struct BackupArgs
+{
     #[command(subcommand)]
     pub command: BackupSubcommand,
 }
 
 #[derive(Subcommand)]
-pub enum BackupSubcommand {
+pub enum BackupSubcommand
+{
     /// List backup sessions with optional filtering
     List(BackupListArgs),
 
@@ -348,7 +409,8 @@ pub enum BackupSubcommand {
 }
 
 #[derive(Parser, Debug)]
-pub struct BackupListArgs {
+pub struct BackupListArgs
+{
     /// Filter: only successful sessions
     #[arg(long)]
     pub successful: bool,
@@ -375,7 +437,8 @@ pub struct BackupListArgs {
 }
 
 #[derive(Parser, Debug)]
-pub struct BackupShowArgs {
+pub struct BackupShowArgs
+{
     /// Session identifier (full or short)
     pub id: String,
 
@@ -389,7 +452,8 @@ pub struct BackupShowArgs {
 }
 
 #[derive(Args, Debug)]
-pub struct BackupRestoreArgs {
+pub struct BackupRestoreArgs
+{
     /// Session ID or alias (e.g., 'latest')
     pub session: String,
 
@@ -423,7 +487,8 @@ pub struct BackupRestoreArgs {
 }
 
 #[derive(Args, Debug)]
-pub struct BackupCleanupArgs {
+pub struct BackupCleanupArgs
+{
     /// RFC3339 or relative span: 7d, 24h, 90m, 45s, 2w
     #[arg(long)]
     pub older_than: Option<String>,
@@ -445,7 +510,8 @@ pub struct BackupCleanupArgs {
     pub json: bool,
 }
 #[derive(Parser)]
-pub struct InitArgs {
+pub struct InitArgs
+{
     /// Directory to initialize config in
     #[arg(default_value = ".")]
     pub path: PathBuf,
@@ -456,7 +522,8 @@ pub struct InitArgs {
 }
 
 #[derive(Debug, Clone, ValueEnum)]
-pub enum Shell {
+pub enum Shell
+{
     Bash,
     Zsh,
     Fish,
@@ -465,7 +532,8 @@ pub enum Shell {
 }
 
 #[derive(Parser)]
-pub struct CompletionsArgs {
+pub struct CompletionsArgs
+{
     /// Target shell
     #[arg(value_enum)]
     pub shell: Shell,
@@ -480,7 +548,8 @@ pub struct CompletionsArgs {
 }
 
 #[derive(Debug, Clone, clap::ValueEnum)]
-pub enum ContextTemplate {
+pub enum ContextTemplate
+{
     Refactor,
     Bugfix,
     Feature,
@@ -488,25 +557,26 @@ pub enum ContextTemplate {
 }
 
 #[derive(Parser, Debug)]
-pub struct ContextArgs {
+pub struct ContextArgs
+{
     /// Query strings (symbol names or qualified names)
     #[arg(value_name = "QUERY", required = true)]
     pub queries: Vec<String>,
 
     /// Project root (used for relative paths)
     #[arg(long, default_value = ".")]
-    pub path: std::path::PathBuf,
+    pub path: PathBuf,
 
     /// Symbols index file (JSONL) produced by `rup symbols`
     #[arg(long, default_value = "symbols.jsonl")]
-    pub symbols: std::path::PathBuf,
+    pub symbols: PathBuf,
 
     /// GPT model or encoding for token estimation (e.g., gpt-4o, o200k_base)
     #[arg(long, default_value = "gpt-4o")]
     pub model: Option<String>,
 
     /// Token budget for the final assembled context
-    #[arg(long, default_value = "6000")]
+    #[arg(long)]
     pub budget: Option<usize>,
 
     /// Use fuzzy/semantic matching in addition to exact/substring
@@ -519,7 +589,7 @@ pub struct ContextArgs {
 
     /// Anchor file to prefer for local scope/proximity ranking
     #[arg(long)]
-    pub anchor: Option<std::path::PathBuf>,
+    pub anchor: Option<PathBuf>,
 
     /// Anchor line number (1-based)
     #[arg(long)]
@@ -544,13 +614,31 @@ pub struct ContextArgs {
     /// Copy result to clipboard
     #[arg(long)]
     pub clipboard: bool,
+
+    /// Tier preset for context assembly (A≈1200, B≈3000, C≈6000 tokens)
+    /// When present, influences default budget/limits unless user overrides
+    #[arg(long = "tier")]
+    pub tier: Option<TierArg>,
+
+    /// Enable deduplication with Jaccard similarity threshold (0.0-1.0)
+    #[arg(long = "dedupe", value_name = "THRESHOLD")]
+    pub dedupe_threshold: Option<f64>,
+
+    /// Hard-cap buckets with format "code=N,interfaces=N,tests=N"
+    #[arg(long = "buckets", value_name = "CAPS")]
+    pub buckets: Option<String>,
+
+    /// Filter items below novelty threshold using TF-IDF rarity (0.0-1.0)
+    #[arg(long = "novelty-min", value_name = "THRESHOLD")]
+    pub novelty_min: Option<f64>,
 }
 
 #[derive(Parser, Debug)]
-pub struct ResolveArgs {
+pub struct ResolveArgs
+{
     /// Files or directories to scan for conflicts
     #[arg(value_name = "PATH", default_value = ".")]
-    pub paths: Vec<std::path::PathBuf>,
+    pub paths: Vec<PathBuf>,
 
     /// Resolution strategy: take-ours, take-theirs, take-base, interactive, smart
     #[arg(long, value_enum, default_value = "smart")]
@@ -566,7 +654,7 @@ pub struct ResolveArgs {
 
     /// Git repository root (auto-detected if not specified)
     #[arg(long)]
-    pub repo_root: Option<std::path::PathBuf>,
+    pub repo_root: Option<PathBuf>,
 
     /// Create backup session before resolution
     #[arg(long, default_value = "true")]

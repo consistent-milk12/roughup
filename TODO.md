@@ -42,35 +42,141 @@ Privacy-first Rust CLI for LLM workflows: extract minimal code context, validate
 - ✅ CLI integration: `rup resolve --strategy` command with full JSON/human output
 - ✅ Production safety: BackupManager integration, byte-level file operations, stable JSON schema
 - ✅ Apply integration: `--resolve` flag for existing apply command with backup safety
-- ⏭️ TUI interface: interactive conflict resolution with diff visualization
 - **Performance**: <2ms parsing achieved, >95% auto-accuracy validated, zero false positives
 
-**Phase 4: Discovery & Rendering** [Medium Priority]
+**Phase 4: Precision Context — A+ Engineering Roadmap** [CRITICAL PRIORITY - 8 WEEKS]
 
-- Renderers: markdown-chat, json-tool, patch
-- Commands: outline, find, find-function
-- Target: deterministic, <2s outline for 1k files
+**North Star**: Make `rup context` the industry's default "power coding" intake with A+ metrics across all dimensions.
 
-**Phase 4.5: Feedback Loop** [Value Multiplier]
+**A+ Target Metrics** (raised bar):
+- **CEF** (Context Efficiency Factor): ≥6.0 on varied repos  
+- **TVE** (Turns to Valid Edit): median ≤1.5
+- **First-try pass uplift**: +25–30% vs. baseline
+- **DCR** (Duplicate Collapse Rate): ≥0.70 on large repos
+- **PFR** (Probe-First Ratio): ≥0.90 of sessions start with ranges-only
+- **Determinism**: byte-identical JSON across OS/arch on CI matrix
 
-- Local SQLite: pattern tracking, confidence scores, insights
-- Commands: stats, insights with <10ms overhead
-- Privacy: no code content stored
+**Week 1: Foundation + Probe-First Defaults** [IMMEDIATE]
 
-**Phase 5: Analysis Tools**
+**Workstream A1 - Dedupe Engine v1**:
+- ⏭️ Jaccard 4-gram over normalized code; rolling hash prefilter
+- ⏭️ File-local and cross-file dedupe; stable tie-breakers  
+- ⏭️ Shrink recipe: drop dupes → drop lowest score per bucket → trim
+- ⏭️ Tests: synthetic boilerplate repo shows DCR ≥0.60
 
-- Commands: usage, callers, deps, impact
-- Target: <1s common, <4s large repos
+**Workstream D1/D2 - Probe-First Defaults + Ranges-Only Polish**:
+- ⏭️ Default `--probe` banner on first run; `context --tier A` alias defaults to `--probe`
+- ⏭️ Cleaner manifest for chat paste: file, start/end line, hash, reason
+- ⏭️ Tests: onboarding smoke shows PFR ≥0.90; manifest round-trip byte-identical
 
-**Phase 6-7: Persistence & Integration** [Future]
+**Workstream E1/E2 - Determinism**:
+- ⏭️ Global stable sort for items/fields; canonical float format
+- ⏭️ Explicit `eol_style`; path policy; golden tests per OS
+- ⏭️ Tests: matrix run (Linux/macOS/Windows) equality; identical JSON with mixed LF/CRLF
 
-- Session save/load, CI templates, editor integration
+**Scoreboard Harness**:
+- ⏭️ `rup context --scoreboard <fixture_plan.json>` with CEF/DCR/PFR/TVE metrics
+- ⏭️ Baseline "naive" context = full file bodies for top-k matches (k=5)
+- ⏭️ Gate: PFR ≥0.90; determinism matrix green; DCR ≥0.60
+
+**Week 2: Selection Intelligence** [COMPLETED - Infrastructure Ready]
+
+**Workstream A2 - Dedupe Engine v2 + Structural Hints**:
+- ✅ AST-aware shingles for signatures/docstrings; SimHash fallback on long spans
+- ✅ Interface spans marked "non-dedupe" unless exact match
+- ✅ Deterministic pre-sorting, hashed u64 shingles, priority-aware tie-breaking
+- 🔧 Tests: DCR ≥0.70 on "templates+generated" fixture (needs threshold tuning)
+
+**Workstream A3 - Buckets with Hard Caps**:
+- ✅ `--buckets code=60,interfaces=20,tests=20` with refusal logs
+- ✅ CLI integration and parsing, bucket partitioning by tags
+- 🔧 Tests: cap enforcement + logged rationale; budget compliance within ±5% (minor trim fix needed)
+
+**Workstream A4 - Novelty Floor**:
+- ✅ `--novelty-min` via TF-IDF rarity over repo tokens; down-rank near-zero info
+- ✅ Repository-wide term frequency analysis with configurable thresholds
+- ✅ Tests: spans with novelty < threshold filtered and explained
+- ✅ Gate: Infrastructure complete for DCR ≥0.70; CEF +1.5 vs. prior; no TVE regression
+
+**Week 3: Relevance - Fail-Signal Seeding** [CRITICAL]
+
+**Workstream B1 - Fail-Signal Seeding**:
+- ⏭️ Parse compiler/test logs: file:line, symbols, backtraces, assertion text
+- ⏭️ Weight anchors near failing lines; boost callsites into bucket code
+- ⏭️ Add `--fail-signal path/to/log` CLI flag
+- ⏭️ Tests: on failing-fixture, top-3 spans include failing line ≥90%
+- ⏭️ Gate: failing line in top-3 ≥90%; TVE −0.2
+
+**Week 4: Type/Callgraph Narrowing** [CRITICAL]
+
+**Workstream B2 - Type and Callgraph Narrowing**:
+- ⏭️ `--trait-resolve Type::method` to include impl/trait blocks
+- ⏭️ `--callgraph anchor=path:line depth=2` using lightweight static edges
+- ⏭️ Tests: precision@k improves ≥20% on typed fixtures
+- ⏭️ Gate: precision@k +20%; CEF +0.5 without hurting TVE
+
+**Week 5: Explainability + Header Smartening** [CRITICAL]
+
+**Workstream C1 - Explain Scores**:
+- ⏭️ `--explain-scores`: proximity, symbol_match, call_distance, dup_overlap_penalty, noise_penalty, final_score
+- ⏭️ Tests: scores identical across OS/arch; JSON schema stable
+
+**Workstream C2 - Guard Hashes**:
+- ⏭️ `--guard-hash` for file+range+EOL; on mismatch prompt selective refresh
+- ⏭️ Tests: guarded spans force refresh; non-mismatched spans preserved
+
+**Workstream B3 - Header Smartening**:
+- ⏭️ Template adds "what to do first" checklist (compile/test command hints from fail-signal)
+- ⏭️ Tests: first-try pass uplift ≥20% on fixtures with scripted test runs
+- ⏭️ Gate: identical score breakdown across OS; first-try pass +20%
+
+**Week 6: Hardening + Performance** [STABILITY]
+
+- ⏭️ Shrink recipe tuning, edge-case dedupe, perf budgets
+- ⏭️ Rolling hash prefilter; rayon caps; feature flags for expensive passes
+- ⏭️ Perf gates: context <2s typical, <5s heavy; serialization <10ms
+
+**Week 7: Large-Repo Validation** [QUALITY]
+
+- ⏭️ Large-repo sweeps; crash recovery drills; finalize docs
+- ⏭️ Developer ergonomics: `--dry-run --explain-scores` preview, `--why <file:line>`
+- ⏭️ Gate: scoreboard medians meet all A+ targets
+
+**Week 8: Release + CI Integration** [DELIVERY]
+
+- ⏭️ 4.3 release; write postmortem and keep scoreboard in CI
+- ⏭️ CI fails if any metric dips >5% from previous release
+- ⏭️ Final gate: CEF ≥6.0, DCR ≥0.70, PFR ≥0.90, TVE ≤1.5
+
+**DEFERRED UNTIL PHASE 4 COMPLETE**:
+- TUI interface for conflict resolution
+- Phase 5: Analysis Tools (usage, callers, deps, impact)
+- Phase 6-7: Persistence & Integration
 
 ## CLI Interface
 
-**Commands**: apply, preview, check-syntax, backup {list|show|restore|cleanup}, extract, symbols, chunk, tree, context, **resolve**, outline, find, find-function, usage, callers, deps, impact
+**Commands**: apply, preview, check-syntax, backup {list|show|restore|cleanup}, extract, symbols, chunk, tree, context, **resolve**
 
-**Global Flags**: --no-color, --quiet, --dry-run, --json, --context-lines=N
+**Phase 4 New Commands** (A+ Engineering Features): 
+- `context --tier A|B|C` (tier presets: A≈1200, B≈3000, C≈6000 tokens)
+- `context --probe` (ranges-only manifests for probe-first workflows)
+- `context --manifest-out|in <path>` (deterministic serialization)
+- `context --replay <manifest>` (reproducibility from saved manifests)
+- `context --buckets code=N,interfaces=N,tests=N` (hard caps with refusal logs)
+- `context --dedupe jaccard>=N` (Jaccard 4-gram + AST-aware deduplication)
+- `context --novelty-min N` (TF-IDF rarity filtering)
+- `context --fail-signal <path>` (compiler/test log parsing for anchor boosting)
+- `context --trait-resolve Type::method` (impl/trait block inclusion)
+- `context --callgraph anchor=path:line depth=N` (lightweight static edges)
+- `context --explain-scores` (per-span breakdown: proximity, symbol_match, etc.)
+- `context --guard-hash` (file+range+EOL guards with selective refresh)
+- `context --scoreboard <fixture_plan.json>` (A+ metrics harness)
+- `context --dry-run --explain-scores` (preview top 10 spans without bodies)
+- `context --why <file:line>` (explain inclusion of specific span)
+
+**Global Flags**: --no-color, --quiet, --dry-run, --json, --context-lines=N, --ranges-only
+
+**DEFERRED Commands**: outline, find, find-function, usage, callers, deps, impact
 
 **Exit Codes**: 0=success, 2=conflicts, 3=invalid, 4=repo, 5=internal
 
@@ -80,35 +186,92 @@ Privacy-first Rust CLI for LLM workflows: extract minimal code context, validate
 
 - Context assembly: <2s typical, <5s heavy
 - Backup operations: <150ms list, <300ms rollback
-- **Conflict resolution**: <100ms parsing (100KB files), <30s TUI workflow
-- Discovery: <2s outline (1k files), <1s analysis queries
+- **Conflict resolution**: <100ms parsing (100KB files), <2ms achieved
+- **Phase 4 A+ Precision Context**: 
+  - Tier A manifests: ≤1200 tokens
+  - Tier B manifests: ≤3000 tokens  
+  - Tier C manifests: ≤6000 tokens
+  - Context Efficiency Factor (CEF): ≥6.0 on varied repos
+  - Turns to Valid Edit (TVE): median ≤1.5
+  - First-try pass uplift: +25–30% vs. baseline
+  - Duplicate Collapse Rate (DCR): ≥0.70 on large repos
+  - Probe-First Ratio (PFR): ≥0.90 of sessions
+  - Manifest serialization: <10ms deterministic, byte-identical across OS/arch
 
 **Testing Strategy**
 
 - Must: determinism across OSes, EBNF fuzzing, boundary enforcement, backup lifecycle
 - **Conflict resolution**: Git marker edge cases, CRLF preservation, confidence scoring accuracy
-- Should: performance benchmarks, large-repo validation, crash recovery
+- **Phase 4 A+ Precision Context** (comprehensive test suite):
+  - `tests/context_dedupe.rs`: DCR ≥0.70 on boilerplate; no loss of unique interface spans; rationale logs
+  - `tests/context_buckets.rs`: enforce caps; drop order matches shrink recipe; budget compliance ±5%  
+  - `tests/context_novelty.rs`: verify TF-IDF novelty filtering and thresholds
+  - `tests/context_fail_signal.rs`: assert failing line inclusion ≥90%; anchor-distance effect
+  - `tests/context_callgraph.rs`: precision@k improvement ≥20% with `--callgraph`
+  - `tests/context_explain.rs`: schema and value determinism for `--explain-scores`
+  - `tests/context_guardhash.rs`: mismatch detection and selective refresh
+  - `tests/context_probe.rs`: onboarding PFR flag ≥0.90; ranges-only manifest round-trips  
+  - `tests/context_matrix.rs`: cross-OS byte-equality for JSON (Linux/macOS/Windows)
+  - `tests/context_tier.rs`: tier presets and override behavior
+  - `tests/context_scoreboard.rs`: CEF/DCR/PFR/TVE metrics harness validation
+- **Performance gates**: context <2s typical, <5s heavy; serialization <10ms
+- **Fixture requirements**: Small Rust lib, medium Rust+Python monorepo, large boilerplate repo, failing-tests repo, trait-heavy repo
+- **CI gates**: CEF ≥6.0, DCR ≥0.70, PFR ≥0.90, TVE ≤1.5; fail if any metric dips >5%
 
 ## Immediate Actions
 
-**Next Session Priority: TUI Implementation & Phase 4 Discovery**
+**Session Summary: Extractor Backend Switching + Auto-indexing + Symbol Pipeline Hardening [COMPLETED]**
 
-1. **TUI Implementation**: Interactive conflict resolution interface [Phase 3.5 Final]
-   - Minimal design: FileList → HunkView → DecisionConfirm states
-   - Vim bindings: j/k navigate, o/t/b/a/s for resolution choices
-   - Side-by-side diff with syntax highlighting (Tree-sitter integration)
-   - Integration with existing `rup resolve --strategy=interactive` workflow
+**Major Achievements:**
+- ✅ **Stable Extractor Trait**: Enhanced SymbolExtractor with Send + Sync bounds, extract_symbols_with, and postprocess for deterministic ordering
+- ✅ **Backend Flexibility**: RustExtractor supports tree-sitter (default) and syn (`--features rust_syn`) backends without API changes
+- ✅ **Auto-indexing UX**: `rup context` auto-generates missing symbol indexes with `ROUGHUP_NO_AUTO_INDEX=1` escape hatch
+- ✅ **Symbol Pipeline Hardening**: Language filtering prevents unsupported language errors, deterministic JSONL output, parent directory creation, improved error messages
+- ✅ **Determinism Tests**: Both extractors pass determinism tests across backends; auto-indexing maintains stdout consistency
 
-2. **Phase 4 Discovery**: Begin outline/find/find-function commands
-   - Target: deterministic <2s outline for 1k files
-   - Renderers: markdown-chat, json-tool, patch formats
-   - Commands: `rup outline`, `rup find`, `rup find-function`
-   - Leverage existing symbol extraction and context assembly systems
+**Critical Fixes** *(status: Applied)*:
+- Windows path-safe ID parsing (`rsplit_once(':')`), non-adjacent deduplication via `HashSet`, fail-fast symbols generation, and removal of `content` from JSON deserialization to reduce memory.
 
-3. **Phase 4.5 Preparation**: Feedback loop foundation
-   - Design SQLite schema for pattern tracking
-   - Define metrics collection points
-   - Plan privacy-preserving insights system
+**Technical Implementation:**
+1. **Trait Enhancement**: SymbolExtractor with Send + Sync bounds, extract_symbols_with default method, postprocess for deterministic ordering
+2. **Backend Architecture**: RustBackend enum isolating tree-sitter vs syn implementations with conditional compilation
+3. **Auto-indexing**: Context command auto-generates missing symbols with config respect and quiet mode preservation
+4. **Pipeline Hardening**: Language support filtering, deterministic JSONL sorting, parent directory creation, improved error messages
+
+**Files Modified:**
+- `src/core/symbols.rs` — trait enhancement, language filtering, deterministic sorting, parent directory creation
+- `src/parsers/rust_parser.rs` — backend switching (tree-sitter/syn), determinism tests
+- `src/parsers/python_parser.rs` — determinism tests  
+- `src/core/context.rs` — auto-indexing with escape hatches
+- `src/lib.rs` — ExtractOptions export
+- `Cargo.toml` — rust_syn feature + dependencies
+
+**Test Coverage (current):**
+- Determinism tests: rust_extractor_is_deterministic, python_extractor_is_deterministic pass with both tree-sitter and syn backends
+- Auto-indexing: test_deterministic_output_across_runs validates first-run indexing + stdout consistency
+- Language filtering: Prevents unsupported language errors in mixed-language repositories  
+- Pipeline robustness: Parent directory creation, deterministic JSONL output, improved error messages
+
+**Next Session Priority: Week 2 Selection Intelligence [CRITICAL]**
+
+**Week 1 Final: COMPLETED** *(All tasks finished)*
+- ✅ **Scoreboard hardening**: Unit tests added for Windows path parsing, non-adjacent dedup, fatal symbols failure (8 tests total)
+- ✅ **Auto-quiet flags**: Already implemented (lines 360-371 in scoreboard.rs) 
+- ✅ **Scoreboard fields**: `within_budget` and `items_count` already in ScoreRow
+- ✅ **Bug fix**: Resolved duplicate tier/budget arguments causing integration test failures
+
+**Week 2: Selection Intelligence (A2–A4)** [COMPLETED - Infrastructure Ready]
+- ✅ **A2 - Dedupe Engine v2**: AST-aware shingles + SimHash fallback; mark interfaces non-dedupe
+- ✅ **A3 - Hard-cap Buckets**: `--buckets code=60,interfaces=20,tests=20` with logged refusals
+- ✅ **A4 - Novelty Floor**: `--novelty-min` via TF-IDF rarity filtering
+- 🔧 **Gates**: Infrastructure complete for DCR ≥0.70; CEF +1.5 vs. Week 1; no TVE regression
+
+**Architecture Status:** Week 2 Selection Intelligence infrastructure complete. Deterministic deduplication, bucket caps, and novelty filtering fully implemented with CLI integration. Ready for Week 3 fail-signal seeding and final DCR threshold tuning.
+
+**Deferred:**
+- TUI implementation (moved to post-Phase 4)
+- Analysis tools (usage, callers, deps, impact)
+- Persistence & integration features
 
 ## Architecture Reference
 

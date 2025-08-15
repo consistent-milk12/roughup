@@ -1,7 +1,8 @@
-//! **roughup** - Super-fast Rust CLI for extracting/packaging source code for LLM workflows (test)
+//! **roughup** - Super-fast Rust CLI for extracting/packaging source code for LLM
+//! workflows (test)
 //!
-//! Smart gitignore-aware processing with parallel execution and tree-sitter symbol extraction.
-//! Performance-first design with memory-mapped I/O and AST caching.
+//! Smart gitignore-aware processing with parallel execution and tree-sitter symbol
+//! extraction. Performance-first design with memory-mapped I/O and AST caching.
 
 /// Command-line interface with clap integration
 pub mod cli;
@@ -9,8 +10,10 @@ pub mod cli;
 /// Shell completion generation
 pub mod completion;
 
-/// Core processing pipeline - High-performance extraction and analysis (2,847 lines total)
-pub mod core {
+/// Core processing pipeline - High-performance extraction and analysis (2,847 lines
+/// total)
+pub mod core
+{
     /// Line-range extraction with gitignore awareness and memory mapping
     pub mod extract;
     pub use extract::run as extract_run;
@@ -43,11 +46,15 @@ pub mod core {
 
     /// Git conflict marker detection and resolution (Phase 3.5)
     pub mod conflict;
-    pub use conflict::{ConflictMarker, ConflictOrigin, ConflictType, parse_conflicts, score_conflict};
+    pub use conflict::{
+        ConflictMarker, ConflictOrigin, ConflictType, parse_conflicts, score_conflict,
+    };
 
     /// Conflict resolution strategies with SmartMerge pipeline
     pub mod resolve;
-    pub use resolve::{Resolution, ResolveStrategy, resolve, resolve_no_check, resolve_batch, run as resolve_run};
+    pub use resolve::{
+        Resolution, ResolveStrategy, resolve, resolve_batch, resolve_no_check, run as resolve_run,
+    };
 
     /// Tree-sitter symbol extraction pipeline (Rust+Python locked, 572 lines)
     pub mod symbols;
@@ -69,7 +76,8 @@ pub mod core {
 }
 
 /// Language processing - AST parsing and symbol extraction with moka caching
-pub mod parsers {
+pub mod parsers
+{
     /// Rust symbol extraction with tree-sitter (qualified names, visibility)
     pub mod rust_parser;
     pub use rust_parser::RustExtractor;
@@ -83,7 +91,8 @@ pub mod parsers {
 }
 
 /// Infrastructure - Configuration, I/O, and utilities (lean architecture)
-pub mod infra {
+pub mod infra
+{
     /// Configuration management with TOML support and feature flags
     pub mod config;
     pub use config::{Config, init as config_init, load_config};
@@ -106,15 +115,14 @@ pub mod infra {
 }
 
 // Strategic re-exports for clean CLI interface
-pub use cli::{AppContext, Cli, Commands};
+// Phase 3 re-exports
+// Core types for external consumers
 pub use core::{
-    chunk_run, context_run, extract_run, generate_patches, render_unified_diff, symbols_run,
-    tree_run,
+    chunk_run, context, context_run, extract_run, generate_patches, render_unified_diff,
+    symbols::{ExtractOptions, Symbol, SymbolKind, Visibility},
+    symbols_run, tree_run,
 };
+
+pub use cli::{AppContext, Cli, Commands};
 pub use infra::{Config, FileWalker, load_config};
 pub use parsers::{PythonExtractor, RustExtractor, SymbolExtractor};
-// Phase 3 re-exports
-pub use core::context;
-
-// Core types for external consumers
-pub use core::symbols::{Symbol, SymbolKind, Visibility};

@@ -9,15 +9,29 @@ use tree_sitter::{Node, Point};
 /// Qualified-name helpers
 pub struct NameUtils;
 
-impl NameUtils {
+impl NameUtils
+{
     /// Join name parts with the given separator into a String
-    pub fn join(parts: &[&str], sep: char) -> String {
+    pub fn join(
+        parts: &[&str],
+        sep: char,
+    ) -> String
+    {
         // Pre-allocate with a simple heuristic
-        let mut out = String::with_capacity(parts.iter().map(|p| p.len() + 1).sum());
+        let mut out = String::with_capacity(
+            parts
+                .iter()
+                .map(|p| p.len() + 1)
+                .sum(),
+        );
 
         // Push parts with separator
-        for (i, p) in parts.iter().enumerate() {
-            if i > 0 {
+        for (i, p) in parts
+            .iter()
+            .enumerate()
+        {
+            if i > 0
+            {
                 out.push(sep);
             }
 
@@ -32,12 +46,19 @@ impl NameUtils {
 /// UTF-8 safe slicing helpers
 pub struct Utf8Utils;
 
-impl Utf8Utils {
+impl Utf8Utils
+{
     /// Return a substring by byte range if it is on a char
     /// boundary within `full`, else None
-    pub fn slice_str(full: &str, start: usize, end: usize) -> Option<&str> {
+    pub fn slice_str(
+        full: &str,
+        start: usize,
+        end: usize,
+    ) -> Option<&str>
+    {
         // Early checks on range validity
-        if start > end || end > full.len() {
+        if start > end || end > full.len()
+        {
             return None;
         }
 
@@ -48,7 +69,11 @@ impl Utf8Utils {
     /// Convert a tree-sitter byte range to a &str slice,
     /// returns None if boundaries are not valid char
     /// boundaries
-    pub fn slice_node_text<'a>(full: &'a str, node: Node<'a>) -> Option<&'a str> {
+    pub fn slice_node_text<'a>(
+        full: &'a str,
+        node: Node<'a>,
+    ) -> Option<&'a str>
+    {
         // Obtain start and end byte offsets
         let s = node.start_byte();
         let e = node.end_byte();
@@ -61,12 +86,19 @@ impl Utf8Utils {
 /// Common Tree-sitter node helpers
 pub struct TsNodeUtils;
 
-impl TsNodeUtils {
+impl TsNodeUtils
+{
     /// Check if `node` has an ancestor of the given kind
-    pub fn has_ancestor(mut node: Node, kind: &str) -> bool {
+    pub fn has_ancestor(
+        mut node: Node,
+        kind: &str,
+    ) -> bool
+    {
         // Walk up parents until root
-        while let Some(p) = node.parent() {
-            if p.kind() == kind {
+        while let Some(p) = node.parent()
+        {
+            if p.kind() == kind
+            {
                 return true;
             }
 
@@ -78,10 +110,16 @@ impl TsNodeUtils {
     }
 
     /// Find the first ancestor of the given kind
-    pub fn find_ancestor<'a>(mut node: Node<'a>, kind: &'a str) -> Option<Node<'a>> {
+    pub fn find_ancestor<'a>(
+        mut node: Node<'a>,
+        kind: &'a str,
+    ) -> Option<Node<'a>>
+    {
         // Walk up parents until we match or hit root
-        while let Some(p) = node.parent() {
-            if p.kind() == kind {
+        while let Some(p) = node.parent()
+        {
+            if p.kind() == kind
+            {
                 return Some(p);
             }
 
@@ -93,16 +131,24 @@ impl TsNodeUtils {
     }
 
     /// Extract text of a child field if present
-    pub fn field_text<'a>(node: Node, field: &str, bytes: &'a [u8]) -> Option<&'a str> {
+    pub fn field_text<'a>(
+        node: Node,
+        field: &str,
+        bytes: &'a [u8],
+    ) -> Option<&'a str>
+    {
         // Locate the child by field name
         let child = node.child_by_field_name(field)?;
 
         // Convert to utf8 text
-        child.utf8_text(bytes).ok()
+        child
+            .utf8_text(bytes)
+            .ok()
     }
 
     /// Convert node positions to 1-based line numbers
-    pub fn line_range_1based(node: Node) -> (usize, usize) {
+    pub fn line_range_1based(node: Node) -> (usize, usize)
+    {
         // Fetch start and end Points
         let s: Point = node.start_position();
         let e: Point = node.end_position();
@@ -115,11 +161,16 @@ impl TsNodeUtils {
 /// Python docstring helpers
 pub struct PyDocUtils;
 
-impl PyDocUtils {
+impl PyDocUtils
+{
     /// Extract a PEP 257 docstring from a function, class,
     /// or module node. This expects the caller to pass a
     /// node whose first statement may be a string literal.
-    pub fn docstring_for(node: Node, bytes: &[u8]) -> Option<String> {
+    pub fn docstring_for(
+        node: Node,
+        bytes: &[u8],
+    ) -> Option<String>
+    {
         // Try 'body' then 'suite', else allow node itself
         let body = node
             .child_by_field_name("body")
@@ -127,9 +178,11 @@ impl PyDocUtils {
             .unwrap_or(node);
 
         // If body is a block or suite, use it
-        let suite = match body.kind() {
+        let suite = match body.kind()
+        {
             "block" | "suite" => Some(body),
-            _ => {
+            _ =>
+            {
                 // Otherwise find the first block or suite
                 (0..body.child_count())
                     .filter_map(|i| body.child(i))
@@ -143,28 +196,45 @@ impl PyDocUtils {
             .find(|n| n.kind() == "expression_statement")?;
 
         // Its first named child must be a string literal
-        let lit = first.named_child(0).filter(|n| n.kind() == "string")?;
+        let lit = first
+            .named_child(0)
+            .filter(|n| n.kind() == "string")?;
 
         // Convert to text and unquote + dedent
-        let raw = lit.utf8_text(bytes).ok()?;
+        let raw = lit
+            .utf8_text(bytes)
+            .ok()?;
 
         Some(Self::unquote_and_dedent(raw))
     }
 
     /// Remove string prefixes, strip quotes, and dedent
-    pub fn unquote_and_dedent(s: &str) -> String {
+    pub fn unquote_and_dedent(s: &str) -> String
+    {
         // Recognize only legal Python string prefixes (r,u,f,b combos, case-insensitive)
         // and consume at most two letters (e.g., r, u, f, b, fr, rf).
         let mut i = 0usize;
         // Uppercase for easy matching
-        let up = s.chars().take(2).collect::<String>().to_uppercase();
-        // Accept "R","U","F","B" or any two-letter combo thereof (FR, RF, UR not common for docstrings, but safe)
-        let first = up.chars().nth(0);
-        let second = up.chars().nth(1);
+        let up = s
+            .chars()
+            .take(2)
+            .collect::<String>()
+            .to_uppercase();
+        // Accept "R","U","F","B" or any two-letter combo thereof (FR, RF, UR not common for
+        // docstrings, but safe)
+        let first = up
+            .chars()
+            .nth(0);
+        let second = up
+            .chars()
+            .nth(1);
         let is_legal = |c: Option<char>| matches!(c, Some('R' | 'U' | 'F' | 'B'));
-        if is_legal(first) && is_legal(second) {
+        if is_legal(first) && is_legal(second)
+        {
             i = 2;
-        } else if is_legal(first) {
+        }
+        else if is_legal(first)
+        {
             i = 1;
         }
 
@@ -172,15 +242,18 @@ impl PyDocUtils {
         let s = &s[i..];
 
         // Handle triple-quoted first
-        for q in [r#"""""#, r#"'''"#] {
-            if s.starts_with(q) && s.ends_with(q) && s.len() >= 2 * q.len() {
+        for q in [r#"""""#, r#"'''"#]
+        {
+            if s.starts_with(q) && s.ends_with(q) && s.len() >= 2 * q.len()
+            {
                 let inner = &s[q.len()..s.len() - q.len()];
                 return Self::dedent(inner);
             }
         }
 
         // Then handle single-quoted
-        if (s.starts_with('"') && s.ends_with('"')) || (s.starts_with('\'') && s.ends_with('\'')) {
+        if (s.starts_with('"') && s.ends_with('"')) || (s.starts_with('\'') && s.ends_with('\''))
+        {
             let inner = &s[1..s.len() - 1];
 
             return inner
@@ -195,15 +268,25 @@ impl PyDocUtils {
     }
 
     /// Minimal dedent across all non-empty lines
-    pub fn dedent(s: &str) -> String {
+    pub fn dedent(s: &str) -> String
+    {
         // Split into lines
-        let lines: Vec<&str> = s.lines().collect();
+        let lines: Vec<&str> = s
+            .lines()
+            .collect();
 
         // Compute common indent
         let indent = lines
             .iter()
-            .filter(|l| !l.trim().is_empty())
-            .map(|l| l.chars().take_while(|c| *c == ' ').count())
+            .filter(|l| {
+                !l.trim()
+                    .is_empty()
+            })
+            .map(|l| {
+                l.chars()
+                    .take_while(|c| *c == ' ')
+                    .count()
+            })
             .min()
             .unwrap_or(0);
 
@@ -219,13 +302,20 @@ impl PyDocUtils {
 /// Rust doc attribute and comment helpers
 pub struct RustDocUtils;
 
-impl RustDocUtils {
+impl RustDocUtils
+{
     /// Extract text from a '#[doc = "..."]' attribute
     /// This supports normal quoted strings. Raw strings
     /// are handled by `doc_attr_text_raw` below.
-    pub fn doc_attr_text(attr: Node, bytes: &[u8]) -> Option<String> {
+    pub fn doc_attr_text(
+        attr: Node,
+        bytes: &[u8],
+    ) -> Option<String>
+    {
         // Convert the whole attribute to text
-        let raw = attr.utf8_text(bytes).ok()?;
+        let raw = attr
+            .utf8_text(bytes)
+            .ok()?;
 
         // Trim leading/trailing whitespace
         let s = raw.trim();
@@ -239,12 +329,14 @@ impl RustDocUtils {
         let mut q = eq + 1;
 
         // Skip spaces
-        while q < after.len() && after.as_bytes()[q].is_ascii_whitespace() {
+        while q < after.len() && after.as_bytes()[q].is_ascii_whitespace()
+        {
             q += 1;
         }
 
         // Expect a normal quote
-        if q >= after.len() || after.as_bytes()[q] != b'"' {
+        if q >= after.len() || after.as_bytes()[q] != b'"'
+        {
             return None;
         }
 
@@ -254,16 +346,19 @@ impl RustDocUtils {
         // Collect until closing quote
         let mut out = String::new();
         let mut i = q;
-        while i < after.len() {
+        while i < after.len()
+        {
             let b = after.as_bytes()[i];
 
-            if b == b'\\' && i + 1 < after.len() {
+            if b == b'\\' && i + 1 < after.len()
+            {
                 out.push(after.as_bytes()[i + 1] as char);
                 i += 2;
                 continue;
             }
 
-            if b == b'"' {
+            if b == b'"'
+            {
                 break;
             }
 
@@ -278,9 +373,15 @@ impl RustDocUtils {
 
     /// Extract text from a '#[doc = r#" ... "#]' raw string
     /// Supports one or more # markers
-    pub fn doc_attr_text_raw(attr: Node, bytes: &[u8]) -> Option<String> {
+    pub fn doc_attr_text_raw(
+        attr: Node,
+        bytes: &[u8],
+    ) -> Option<String>
+    {
         // Convert to text
-        let raw = attr.utf8_text(bytes).ok()?;
+        let raw = attr
+            .utf8_text(bytes)
+            .ok()?;
 
         // Find '#[doc'
         let start = raw.find("#[doc")?;
@@ -291,12 +392,14 @@ impl RustDocUtils {
         let mut i = eq + 1;
 
         // Skip spaces
-        while i < after.len() && after.as_bytes()[i].is_ascii_whitespace() {
+        while i < after.len() && after.as_bytes()[i].is_ascii_whitespace()
+        {
             i += 1;
         }
 
         // Expect 'r'
-        if i >= after.len() || after.as_bytes()[i] != b'r' {
+        if i >= after.len() || after.as_bytes()[i] != b'r'
+        {
             return None;
         }
 
@@ -304,14 +407,16 @@ impl RustDocUtils {
 
         // Count '#' markers
         let mut hashes = 0usize;
-        while i < after.len() && after.as_bytes()[i] == b'#' {
+        while i < after.len() && after.as_bytes()[i] == b'#'
+        {
             hashes += 1;
 
             i += 1;
         }
 
         // Expect opening quote
-        if i >= after.len() || after.as_bytes()[i] != b'"' {
+        if i >= after.len() || after.as_bytes()[i] != b'"'
+        {
             return None;
         }
 
@@ -332,21 +437,31 @@ impl RustDocUtils {
 
     /// Extract from '///...' and '/** ... */' when they are
     /// doc comments. Returns normalized text when detected.
-    pub fn doc_comment_text(n: Node, bytes: &[u8]) -> Option<String> {
+    pub fn doc_comment_text(
+        n: Node,
+        bytes: &[u8],
+    ) -> Option<String>
+    {
         // Convert the node text
-        let t = n.utf8_text(bytes).ok()?;
+        let t = n
+            .utf8_text(bytes)
+            .ok()?;
 
         // Trim left for uniform checks
         let s = t.trim_start();
 
         // Handle '///' line doc
-        if s.starts_with("///") {
-            let body = s.trim_start_matches("///").trim_start();
+        if s.starts_with("///")
+        {
+            let body = s
+                .trim_start_matches("///")
+                .trim_start();
             return Some(body.to_string());
         }
 
         // Handle '/** ... */' block doc
-        if s.starts_with("/**") {
+        if s.starts_with("/**")
+        {
             let body = s
                 .trim_start_matches("/**")
                 .trim_end()
@@ -356,7 +471,10 @@ impl RustDocUtils {
             // Strip leading '*' on lines
             let norm = body
                 .lines()
-                .map(|l| l.trim_start_matches('*').trim_start())
+                .map(|l| {
+                    l.trim_start_matches('*')
+                        .trim_start()
+                })
                 .collect::<Vec<&str>>()
                 .join("\n");
 
@@ -371,28 +489,32 @@ impl RustDocUtils {
 /// Simple visibility helpers
 pub struct VisibilityUtils;
 
-impl VisibilityUtils {
+impl VisibilityUtils
+{
     /// Python private if name starts with underscore
-    pub fn python_from_name(name: &str) -> bool {
+    pub fn python_from_name(name: &str) -> bool
+    {
         // True means private, False means public
         name.starts_with('_')
     }
 
     /// Generic helper to map a bool private flag to
     /// a string label for quick logs or JSON dumps
-    pub fn label_from_private(is_private: bool) -> &'static str {
+    pub fn label_from_private(is_private: bool) -> &'static str
+    {
         // Return a stable label
         if is_private { "private" } else { "public" }
     }
 }
 
 #[cfg(test)]
-mod tests {
+mod tests
+{
     // Import super for access to all structs
-    use super::*;
-
     // Bring parser for small parser-based tests
     use tree_sitter::{Language, Parser};
+
+    use super::*;
 
     // Use Python grammar for quick docstring checks
     unsafe extern "C" {
@@ -400,23 +522,28 @@ mod tests {
     }
 
     /// Build a tiny Python tree to test docstring paths
-    fn parse_python(src: &str) -> (Parser, tree_sitter::Tree) {
+    fn parse_python(src: &str) -> (Parser, tree_sitter::Tree)
+    {
         // Create parser
         let mut p = Parser::new();
 
         // Set language
         let lang = unsafe { tree_sitter_python() };
-        p.set_language(&lang).expect("set language");
+        p.set_language(&lang)
+            .expect("set language");
 
         // Parse
-        let tree = p.parse(src, None).expect("parse");
+        let tree = p
+            .parse(src, None)
+            .expect("parse");
 
         // Return parser and tree
         (p, tree)
     }
 
     #[test]
-    fn name_join_works() {
+    fn name_join_works()
+    {
         // Parts to join
         let parts = ["A", "B", "m"];
 
@@ -428,7 +555,8 @@ mod tests {
     }
 
     #[test]
-    fn utf8_slice_safe_boundaries() {
+    fn utf8_slice_safe_boundaries()
+    {
         // A string with multi-byte chars
         let s = "αβγ.rs";
 
@@ -444,7 +572,8 @@ mod tests {
     }
 
     #[test]
-    fn pydoc_unquote_and_dedent_triple() {
+    fn pydoc_unquote_and_dedent_triple()
+    {
         // A triple-quoted raw docstring
         let s = r#"
             r"""Line1
@@ -460,7 +589,8 @@ mod tests {
     }
 
     #[test]
-    fn pydoc_unquote_single() {
+    fn pydoc_unquote_single()
+    {
         // Single-quoted docstring
         let s = "'one line'";
 
@@ -472,7 +602,8 @@ mod tests {
     }
 
     #[test]
-    fn rust_doc_attr_raw_basic() {
+    fn rust_doc_attr_raw_basic()
+    {
         // Minimal raw doc attribute
         let _src = r#"
             #[doc = r#"Hello "\# World"\#]
@@ -496,24 +627,36 @@ mod tests {
     // Helper to unit-test doc_comment_text using a
     // string slice without a parsed node. This is
     // isolated to test normalization logic only.
-    impl RustDocUtils {
-        pub fn doc_comment_text_fake(s: &str) -> Option<String> {
+    impl RustDocUtils
+    {
+        pub fn doc_comment_text_fake(s: &str) -> Option<String>
+        {
             // Trim start for uniform checks
             let t = s.trim_start();
 
             // Handle '///'
-            if t.starts_with("///") {
-                let body = t.trim_start_matches("///").trim_start();
+            if t.starts_with("///")
+            {
+                let body = t
+                    .trim_start_matches("///")
+                    .trim_start();
                 return Some(body.to_string());
             }
 
             // Handle '/** ... */'
-            if t.starts_with("/**") {
-                let body = t.trim_start_matches("/**").trim_end_matches("*/").trim();
+            if t.starts_with("/**")
+            {
+                let body = t
+                    .trim_start_matches("/**")
+                    .trim_end_matches("*/")
+                    .trim();
 
                 let norm = body
                     .lines()
-                    .map(|l| l.trim_start_matches('*').trim())
+                    .map(|l| {
+                        l.trim_start_matches('*')
+                            .trim()
+                    })
                     .collect::<Vec<&str>>()
                     .join("\n")
                     .trim()
@@ -527,7 +670,8 @@ mod tests {
     }
 
     #[test]
-    fn tsnode_has_ancestor_smoke() {
+    fn tsnode_has_ancestor_smoke()
+    {
         // Minimal Python snippet with a class and method
         let src = r#"
             class A:
@@ -546,20 +690,29 @@ mod tests {
         let mut method: Option<Node> = None;
 
         // Simple DFS for the test
-        fn dfs<'a>(n: Node<'a>, out: &mut Option<Node<'a>>) {
-            if n.kind() == "function_definition" {
+        fn dfs<'a>(
+            n: Node<'a>,
+            out: &mut Option<Node<'a>>,
+        )
+        {
+            if n.kind() == "function_definition"
+            {
                 *out = Some(n);
                 return;
             }
 
             let c = n.walk();
 
-            for i in 0..n.named_child_count() {
-                let ch = n.named_child(i).unwrap();
+            for i in 0..n.named_child_count()
+            {
+                let ch = n
+                    .named_child(i)
+                    .unwrap();
 
                 dfs(ch, out);
 
-                if out.is_some() {
+                if out.is_some()
+                {
                     return;
                 }
             }

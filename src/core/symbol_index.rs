@@ -1,17 +1,21 @@
+use std::{
+    collections::{BTreeMap, HashMap, HashSet},
+    fs::File,
+    io::{BufRead, BufReader},
+    path::{Path, PathBuf},
+};
+
 use anyhow::{Context, Result};
 use rayon::prelude::*;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap, HashSet};
-use std::fs::File;
-use std::io::{BufRead, BufReader};
-use std::path::{Path, PathBuf};
 
 use crate::core::symbols::{Symbol, SymbolKind};
 
 /// Options for symbol lookup and ranking
 #[derive(Debug, Clone, Default)]
-pub struct LookupOptions<'a> {
+pub struct LookupOptions<'a>
+{
     /// Prefer fuzzy searching when true; otherwise exact/prefix/substring
     pub semantic: bool,
 
@@ -31,15 +35,21 @@ pub struct LookupOptions<'a> {
     pub kinds: Option<&'a [SymbolKind]>,
 }
 
-impl<'a> LookupOptions<'a> {
-    pub fn with_limit(mut self, limit: usize) -> Self {
+impl<'a> LookupOptions<'a>
+{
+    pub fn with_limit(
+        mut self,
+        limit: usize,
+    ) -> Self
+    {
         self.limit = limit;
         self
     }
 }
 
 /// In-memory index over `symbols.jsonl`
-pub struct SymbolIndex {
+pub struct SymbolIndex
+{
     /// All symbols loaded from the index, sorted deterministically
     symbols: Vec<Symbol>,
 
@@ -54,7 +64,8 @@ pub struct SymbolIndex {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RankedSymbol {
+pub struct RankedSymbol
+{
     /// The symbol matched in the lookup
     pub symbol: Symbol,
 
@@ -62,14 +73,16 @@ pub struct RankedSymbol {
     pub score: (u8, u8, u8, u8),
 }
 
-impl SymbolIndex {
+impl SymbolIndex
+{
     /// Loads symbols from a JSONL file and builds the index.
     ///
     /// - Reads each line as a JSON-encoded `Symbol`.
     /// - Skips empty lines.
     /// - Sorts symbols deterministically by file path and start line.
     /// - Builds lookup maps for fast queries.
-    pub fn load(jsonl: &Path) -> Result<Self> {
+    pub fn load(jsonl: &Path) -> Result<Self>
+    {
         // Open the symbols file
         let f = File::open(jsonl)
             .with_context(|| format!("Failed to open symbols file: {}", jsonl.display()))?;
@@ -77,9 +90,15 @@ impl SymbolIndex {
         let mut symbols: Vec<Symbol> = Vec::new();
 
         // Parse each line as a Symbol
-        for (i, line) in reader.lines().enumerate() {
+        for (i, line) in reader
+            .lines()
+            .enumerate()
+        {
             let line = line.with_context(|| format!("Failed to read line {}", i + 1))?;
-            if line.trim().is_empty() {
+            if line
+                .trim()
+                .is_empty()
+            {
                 continue;
             }
             let s: Symbol = serde_json::from_str(&line)
@@ -89,22 +108,41 @@ impl SymbolIndex {
 
         // Sort symbols by file path, then start_line, then end_line for deterministic order
         symbols.sort_by(|a, b| {
-            (a.file.clone(), a.start_line, a.end_line).cmp(&(
-                b.file.clone(),
-                b.start_line,
-                b.end_line,
-            ))
+            (
+                a.file
+                    .clone(),
+                a.start_line,
+                a.end_line,
+            )
+                .cmp(&(
+                    b.file
+                        .clone(),
+                    b.start_line,
+                    b.end_line,
+                ))
         });
 
         // Build name-to-indices and file-to-indices maps
         let mut name_to_idxs: HashMap<String, Vec<usize>> = HashMap::new();
         let mut file_to_idxs: BTreeMap<PathBuf, Vec<usize>> = BTreeMap::new();
-        for (idx, s) in symbols.iter().enumerate() {
+        for (idx, s) in symbols
+            .iter()
+            .enumerate()
+        {
             name_to_idxs
-                .entry(s.name.to_ascii_lowercase())
+                .entry(
+                    s.name
+                        .to_ascii_lowercase(),
+                )
                 .or_default()
                 .push(idx);
-            file_to_idxs.entry(s.file.clone()).or_default().push(idx);
+            file_to_idxs
+                .entry(
+                    s.file
+                        .clone(),
+                )
+                .or_default()
+                .push(idx);
         }
 
         // Regex for tokenizing symbol names (snake/camel case)
@@ -116,14 +154,21 @@ impl SymbolIndex {
         })
     }
 
-    pub fn all(&self) -> &[Symbol] {
+    pub fn all(&self) -> &[Symbol]
+    {
         &self.symbols
     }
 
     /// Lookup by query string and options. Returns ranked matches.
-    pub fn lookup<'a>(&'a self, query: &str, opts: LookupOptions<'a>) -> Vec<RankedSymbol> {
+    pub fn lookup<'a>(
+        &'a self,
+        query: &str,
+        opts: LookupOptions<'a>,
+    ) -> Vec<RankedSymbol>
+    {
         let q = query.trim();
-        if q.is_empty() {
+        if q.is_empty()
+        {
             return Vec::new();
         }
         let ql = q.to_ascii_lowercase();
@@ -132,8 +177,14 @@ impl SymbolIndex {
         let mut candidates: Vec<usize> = Vec::new();
 
         // 1) Fast path: exact simple-name match
-        if let Some(ix) = self.name_to_idxs.get(&ql) {
-            candidates.extend(ix.iter().copied());
+        if let Some(ix) = self
+            .name_to_idxs
+            .get(&ql)
+        {
+            candidates.extend(
+                ix.iter()
+                    .copied(),
+            );
         }
 
         // 2) Substring/prefix in simple or qualified names
@@ -143,8 +194,12 @@ impl SymbolIndex {
             .par_iter()
             .enumerate()
             .filter(|(_, s)| {
-                let name = s.name.to_ascii_lowercase();
-                let qn = s.qualified_name.to_ascii_lowercase();
+                let name = s
+                    .name
+                    .to_ascii_lowercase();
+                let qn = s
+                    .qualified_name
+                    .to_ascii_lowercase();
                 // Keep old substring behavior for candidate collection
                 // Semantic scoring will filter out noise later
                 name.starts_with(&ql_clone)
@@ -157,19 +212,26 @@ impl SymbolIndex {
         candidates.extend(more);
 
         // 3) Include all symbols from anchor directory for scope/proximity scoring
-        if let Some(anchor_dir) = opts.anchor_file.and_then(|p| p.parent()) {
+        if let Some(anchor_dir) = opts
+            .anchor_file
+            .and_then(|p| p.parent())
+        {
             let anchor_more: Vec<usize> = self
                 .symbols
                 .par_iter()
                 .enumerate()
-                .filter(|(_, s)| s.file.starts_with(anchor_dir))
+                .filter(|(_, s)| {
+                    s.file
+                        .starts_with(anchor_dir)
+                })
                 .map(|(i, _)| i)
                 .collect();
             candidates.extend(anchor_more);
         }
 
         // 3) If semantic, include fuzzy token matches
-        if opts.semantic {
+        if opts.semantic
+        {
             let tokens = self.tokens(&ql);
             let sem_more: Vec<usize> = self
                 .symbols
@@ -188,16 +250,25 @@ impl SymbolIndex {
         candidates.dedup();
 
         // Optional kind filter
-        if let Some(kinds) = opts.kinds {
-            let set: HashSet<SymbolKind> = kinds.iter().cloned().collect();
+        if let Some(kinds) = opts.kinds
+        {
+            let set: HashSet<SymbolKind> = kinds
+                .iter()
+                .cloned()
+                .collect();
             candidates.retain(|&i| set.contains(&self.symbols[i].kind));
         }
 
         // Compute scores and rank
         let anchor_dir = opts
             .anchor_file
-            .and_then(|p| p.parent().map(|x| x.to_path_buf()));
-        let anchor_file = opts.anchor_file.map(|p| p.to_path_buf());
+            .and_then(|p| {
+                p.parent()
+                    .map(|x| x.to_path_buf())
+            });
+        let anchor_file = opts
+            .anchor_file
+            .map(|p| p.to_path_buf());
         let anchor_line = opts.anchor_line;
         let history = opts.history;
 
@@ -208,9 +279,12 @@ impl SymbolIndex {
                 let semantic = self.semantic_score(&ql, s);
                 let scope = self.scope_score(anchor_dir.as_ref(), &s.file);
                 let proximity = self.proximity_score(anchor_file.as_ref(), anchor_line, s);
-                let hist = if let Some(h) = history {
+                let hist = if let Some(h) = history
+                {
                     if h.contains(&s.qualified_name) { 1 } else { 0 }
-                } else {
+                }
+                else
+                {
                     0
                 };
                 RankedSymbol {
@@ -222,31 +296,64 @@ impl SymbolIndex {
 
         ranked.sort_by_key(|it| {
             (
-                std::cmp::Reverse(it.score.0),    // semantic: higher first
-                std::cmp::Reverse(it.score.1),    // scope: higher first
-                std::cmp::Reverse(it.score.2),    // proximity: higher first
-                std::cmp::Reverse(it.score.3),    // history: higher first
-                it.symbol.file.clone(),           // tiebreak: path asc
-                it.symbol.start_line,             // tiebreak: line asc
-                it.symbol.qualified_name.clone(), // tiebreak: name asc
+                std::cmp::Reverse(
+                    it.score
+                        .0,
+                ), // semantic: higher first
+                std::cmp::Reverse(
+                    it.score
+                        .1,
+                ), // scope: higher first
+                std::cmp::Reverse(
+                    it.score
+                        .2,
+                ), // proximity: higher first
+                std::cmp::Reverse(
+                    it.score
+                        .3,
+                ), // history: higher first
+                it.symbol
+                    .file
+                    .clone(), // tiebreak: path asc
+                it.symbol
+                    .start_line, // tiebreak: line asc
+                it.symbol
+                    .qualified_name
+                    .clone(), // tiebreak: name asc
             )
         });
 
-        let limit = opts.limit.max(1);
+        let limit = opts
+            .limit
+            .max(1);
         ranked.truncate(limit);
         ranked
     }
 
-    fn tokens(&self, s: &str) -> Vec<String> {
+    fn tokens(
+        &self,
+        s: &str,
+    ) -> Vec<String>
+    {
         self.snake_re
             .find_iter(s)
-            .map(|m| m.as_str().to_ascii_lowercase())
+            .map(|m| {
+                m.as_str()
+                    .to_ascii_lowercase()
+            })
             .collect()
     }
 
-    fn token_hit(&self, tokens: &[String], name: &str) -> bool {
+    fn token_hit(
+        &self,
+        tokens: &[String],
+        name: &str,
+    ) -> bool
+    {
         let nl = name.to_ascii_lowercase();
-        tokens.iter().all(|t| nl.contains(t))
+        tokens
+            .iter()
+            .all(|t| nl.contains(t))
     }
 
     /// Compute a conservative semantic score for a symbol name.
@@ -254,22 +361,35 @@ impl SymbolIndex {
     /// 2 = prefix (len >= 2)
     /// 1 = token/segment match across non-alnum splits (len >= 2)
     /// 0 = otherwise
-    fn semantic_score(&self, query: &str, s: &Symbol) -> u8 {
+    fn semantic_score(
+        &self,
+        query: &str,
+        s: &Symbol,
+    ) -> u8
+    {
         // Normalize both to lowercase for case-insensitive compare
-        let q = query.trim().to_lowercase(); // normalized query
-        let n = s.name.trim().to_lowercase(); // normalized name
+        let q = query
+            .trim()
+            .to_lowercase(); // normalized query
+        let n = s
+            .name
+            .trim()
+            .to_lowercase(); // normalized name
         // If query is empty, no semantic lift
-        if q.is_empty() {
+        if q.is_empty()
+        {
             // guard for empty
             return 0; // no score
         }
         // Exact match → strongest signal
-        if n == q {
+        if n == q
+        {
             // exact match
             return 3; // score 3
         }
         // Prefix match (require length >= 2 to avoid noise)
-        if q.len() >= 2 && n.starts_with(&q) {
+        if q.len() >= 2 && n.starts_with(&q)
+        {
             // prefix match
             return 2; // score 2
         }
@@ -289,14 +409,21 @@ impl SymbolIndex {
     ///
     /// - Returns 1 if the symbol's file is within the anchor directory.
     /// - Returns 0 otherwise.
-    fn scope_score(&self, anchor_dir: Option<&PathBuf>, file: &Path) -> u8 {
-        if let Some(dir) = anchor_dir {
+    fn scope_score(
+        &self,
+        anchor_dir: Option<&PathBuf>,
+        file: &Path,
+    ) -> u8
+    {
+        if let Some(dir) = anchor_dir
+        {
             // Use string-based comparison for relative paths to avoid canonicalize issues
             let dir_str = dir.to_string_lossy();
             let file_str = file.to_string_lossy();
 
             // Check if file path starts with directory path
-            if file_str.starts_with(dir_str.as_ref()) {
+            if file_str.starts_with(dir_str.as_ref())
+            {
                 return 1;
             }
         }
@@ -315,35 +442,53 @@ impl SymbolIndex {
         anchor_file: Option<&PathBuf>,
         anchor_line: Option<usize>,
         s: &Symbol,
-    ) -> u8 {
+    ) -> u8
+    {
         if let Some(af) = anchor_file
             && &s.file == af
         {
-            if let Some(al) = anchor_line {
+            if let Some(al) = anchor_line
+            {
                 // Close (≤20 lines): 2, medium (≤100): 1, else 0 for line distance
-                let d = if al < s.start_line {
+                let d = if al < s.start_line
+                {
                     s.start_line - al
-                } else {
+                }
+                else
+                {
                     al.saturating_sub(s.end_line)
                 };
 
-                if d <= 20 {
+                if d <= 20
+                {
                     2
-                } else if d <= 100 {
+                }
+                else if d <= 100
+                {
                     1
-                } else {
+                }
+                else
+                {
                     3 // Same file but far from line gets base score
                 }
-            } else {
+            }
+            else
+            {
                 3 // Same file, no line anchor
             }
-        } else {
+        }
+        else
+        {
             0
         }
     }
 
     /// Get all symbols in a file (deterministic order)
-    pub fn symbols_in_file(&self, file: &Path) -> &[usize] {
+    pub fn symbols_in_file(
+        &self,
+        file: &Path,
+    ) -> &[usize]
+    {
         self.file_to_idxs
             .get(file)
             .map(|v| v.as_slice())

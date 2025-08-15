@@ -1,10 +1,13 @@
-use crate::cli::{AppContext, InitArgs};
-use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
+
+use crate::cli::{AppContext, InitArgs};
+
 #[derive(Debug, Serialize, Deserialize)]
-pub struct Config {
+pub struct Config
+{
     /// Default ignore patterns (in addition to .gitignore)
     pub ignore_patterns: Vec<String>,
 
@@ -25,34 +28,40 @@ pub struct Config {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct ExtractConfig {
+pub struct ExtractConfig
+{
     pub annotate: bool,
     pub fence: bool,
     pub output_file: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct TreeConfig {
+pub struct TreeConfig
+{
     pub max_depth: Option<usize>,
     pub show_hidden: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct SymbolsConfig {
+pub struct SymbolsConfig
+{
     pub languages: Vec<String>,
     pub include_private: bool,
     pub output_file: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct ChunkConfig {
+pub struct ChunkConfig
+{
     pub max_tokens: usize,
     pub model: String,
     pub output_dir: String,
 }
 
-impl Default for Config {
-    fn default() -> Self {
+impl Default for Config
+{
+    fn default() -> Self
+    {
         Self {
             ignore_patterns: vec![
                 "target/".to_string(),
@@ -71,16 +80,9 @@ impl Default for Config {
                 fence: false,
                 output_file: "extracted_source.txt".to_string(),
             },
-            tree: TreeConfig {
-                max_depth: None,
-                show_hidden: false,
-            },
+            tree: TreeConfig { max_depth: None, show_hidden: false },
             symbols: SymbolsConfig {
-                languages: vec![
-                    "rust".to_string(),
-                    "python".to_string(),
-                    "javascript".to_string(),
-                ],
+                languages: vec!["rust".to_string(), "python".to_string(), "javascript".to_string()],
                 include_private: false,
                 output_file: "symbols.jsonl".to_string(),
             },
@@ -93,19 +95,17 @@ impl Default for Config {
     }
 }
 
-pub fn load_config() -> Result<Config> {
+pub fn load_config() -> Result<Config>
+{
     let mut builder = config::Config::builder();
 
     // Load from config files in priority order
-    let config_paths = [
-        "roughup.toml",
-        "roughup.yaml",
-        "roughup.json",
-        ".roughup.toml",
-    ];
+    let config_paths = ["roughup.toml", "roughup.yaml", "roughup.json", ".roughup.toml"];
 
-    for path in &config_paths {
-        if Path::new(path).exists() {
+    for path in &config_paths
+    {
+        if Path::new(path).exists()
+        {
             builder = builder.add_source(config::File::with_name(path));
             break;
         }
@@ -114,7 +114,9 @@ pub fn load_config() -> Result<Config> {
     // Add environment variables with ROUGHUP_ prefix
     builder = builder.add_source(config::Environment::with_prefix("ROUGHUP").separator("_"));
 
-    let cfg = builder.build().context("Failed to load configuration")?;
+    let cfg = builder
+        .build()
+        .context("Failed to load configuration")?;
     let parsed: Config = cfg
         .try_deserialize()
         .context("Failed to parse configuration")?;
@@ -122,10 +124,17 @@ pub fn load_config() -> Result<Config> {
     Ok(parsed)
 }
 
-pub fn init(args: InitArgs, ctx: &AppContext) -> Result<()> {
-    let config_path = args.path.join("roughup.toml");
+pub fn init(
+    args: InitArgs,
+    ctx: &AppContext,
+) -> Result<()>
+{
+    let config_path = args
+        .path
+        .join("roughup.toml");
 
-    if config_path.exists() && !args.force {
+    if config_path.exists() && !args.force
+    {
         anyhow::bail!(
             "Config file already exists at {}. Use --force to overwrite.",
             config_path.display()
@@ -138,7 +147,8 @@ pub fn init(args: InitArgs, ctx: &AppContext) -> Result<()> {
 
     std::fs::write(&config_path, toml_string).context("Failed to write config file")?;
 
-    if !ctx.quiet {
+    if !ctx.quiet
+    {
         println!("Created config file at {}", config_path.display());
     }
     Ok(())

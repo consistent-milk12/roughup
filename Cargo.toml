@@ -66,12 +66,22 @@ predicates = "3.1.3"
 assert_cmd = "2.0.17"
 assert_fs = "1.1.3"
 
+# Optional syn backend for Rust parsing
+syn = { version = "2.0.105", features = ["full"], optional = true }
+quote = { version = "1.0.40", optional = true }
+proc-macro2 = { version = "1.0.97", optional = true }
+bytecount = { version = "0.6.9", optional = true }
+
 # Platform-specific dependencies
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.175"
 
 [build-dependencies]
 cc = "*" # helps some tree-sitter grammar builds on CI
+
+[features]
+default = []
+rust_syn = ["syn", "quote", "proc-macro2", "bytecount"]
 
 [dev-dependencies]
 

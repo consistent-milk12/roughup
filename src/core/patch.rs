@@ -3,16 +3,20 @@
 //! Converts our human-readable edit format into standard Git patches
 //! for robust application with context matching and 3-way merging.
 
+use std::{
+    collections::BTreeMap,
+    fs,
+    path::{Path, PathBuf},
+};
+
 use anyhow::{Context, Result};
-use std::fs;
-use std::path::Path;
-use std::{collections::BTreeMap, path::PathBuf};
 
 use crate::core::edit::{EditOperation, EditSpec, generate_cid, normalize_for_cid};
 
 /// A single hunk in a unified diff
 #[derive(Debug, Clone)]
-pub struct Hunk {
+pub struct Hunk
+{
     pub old_start: usize, // 1-based line number in old file
     pub old_count: usize, // Number of lines in old version
     pub new_start: usize, // 1-based line number in new file
@@ -22,7 +26,8 @@ pub struct Hunk {
 
 /// A line in a hunk with its change type
 #[derive(Debug, Clone)]
-pub enum HunkLine {
+pub enum HunkLine
+{
     Context(String), // Unchanged line (starts with ' ')
     Remove(String),  // Removed line (starts with '-')
     Add(String),     // Added line (starts with '+')
@@ -30,7 +35,8 @@ pub enum HunkLine {
 
 /// A complete patch for one file
 #[derive(Debug, Clone)]
-pub struct FilePatch {
+pub struct FilePatch
+{
     pub path: String,
     pub hunks: Vec<Hunk>,
     pub metadata: PatchMetadata,
@@ -38,7 +44,8 @@ pub struct FilePatch {
 
 /// Patch metadata for traceability
 #[derive(Debug, Clone)]
-pub struct PatchMetadata {
+pub struct PatchMetadata
+{
     pub source_cid: Option<String>, // CID of source EBNF operation
     pub context_lines: usize,
     pub engine: String,
@@ -46,19 +53,23 @@ pub struct PatchMetadata {
 
 /// Complete patch set
 #[derive(Debug, Clone)]
-pub struct PatchSet {
+pub struct PatchSet
+{
     pub file_patches: Vec<FilePatch>,
 }
 
 /// Patch generation configuration
-pub struct PatchConfig {
+pub struct PatchConfig
+{
     pub context_lines: usize,
     pub validate_guards: bool,
     pub merge_adjacent: bool,
 }
 
-impl Default for PatchConfig {
-    fn default() -> Self {
+impl Default for PatchConfig
+{
+    fn default() -> Self
+    {
         Self {
             context_lines: 3,
             validate_guards: true,
@@ -68,28 +79,33 @@ impl Default for PatchConfig {
 }
 
 /// Convert EBNF edit specification to unified diff patches
-pub fn generate_patches(spec: &EditSpec, config: &PatchConfig) -> Result<PatchSet> {
+pub fn generate_patches(
+    spec: &EditSpec,
+    config: &PatchConfig,
+) -> Result<PatchSet>
+{
     let mut file_patches = Vec::new();
 
     // Group operations by file
     let mut ops_by_file: BTreeMap<String, Vec<&EditOperation>> = BTreeMap::new();
-    for file_block in &spec.file_blocks {
-        let path_str = file_block.path.to_string_lossy().to_string();
+    for file_block in &spec.file_blocks
+    {
+        let path_str = file_block
+            .path
+            .to_string_lossy()
+            .to_string();
 
         // Re-validate CID only when needed, and only on existing files
         let needs_validation = config.validate_guards
-            && file_block.operations.iter().any(|op| {
-                matches!(
-                    op,
-                    EditOperation::Replace {
-                        guard_cid: Some(_),
-                        ..
-                    }
-                )
-            });
+            && file_block
+                .operations
+                .iter()
+                .any(|op| matches!(op, EditOperation::Replace { guard_cid: Some(_), .. }));
 
-        if needs_validation {
-            if !Path::new(&path_str).exists() {
+        if needs_validation
+        {
+            if !Path::new(&path_str).exists()
+            {
                 // If a guarded REPLACE targets a missing file, that's a real preimage problem.
                 anyhow::bail!("Guard validation failed: {} does not exist", path_str);
             }
@@ -97,23 +113,25 @@ pub fn generate_patches(spec: &EditSpec, config: &PatchConfig) -> Result<PatchSe
             let current_content = std::fs::read_to_string(&file_block.path).with_context(|| {
                 format!("Failed to re-read file for CID validation: {}", path_str)
             })?;
-            let current_lines: Vec<&str> = current_content.lines().collect();
+            let current_lines: Vec<&str> = current_content
+                .lines()
+                .collect();
 
-            for op in &file_block.operations {
+            for op in &file_block.operations
+            {
                 if let EditOperation::Replace {
-                    start_line,
-                    end_line,
-                    guard_cid: Some(cid),
-                    ..
+                    start_line, end_line, guard_cid: Some(cid), ..
                 } = op
                 {
                     let actual_lines = &current_lines[(*start_line - 1)..*end_line];
                     let actual_content = actual_lines.join("\n");
                     let actual_cid = generate_cid(&actual_content);
 
-                    if cid != &actual_cid {
+                    if cid != &actual_cid
+                    {
                         anyhow::bail!(
-                            "Guard CID mismatch during patch generation for {}:{}-{}: expected {}, got {}",
+                            "Guard CID mismatch during patch generation for {}:{}-{}: expected \
+                             {}, got {}",
                             path_str,
                             start_line,
                             end_line,
@@ -132,7 +150,8 @@ pub fn generate_patches(spec: &EditSpec, config: &PatchConfig) -> Result<PatchSe
     }
 
     // Generate patch for each file
-    for (path_str, operations) in ops_by_file {
+    for (path_str, operations) in ops_by_file
+    {
         let file_patch = generate_file_patch(&path_str, operations, config)
             .with_context(|| format!("Failed to generate patch for {}", path_str))?;
         file_patches.push(file_patch);
@@ -146,23 +165,30 @@ fn generate_file_patch(
     path_str: &str,
     operations: Vec<&EditOperation>,
     config: &PatchConfig,
-) -> Result<FilePatch> {
+) -> Result<FilePatch>
+{
     // Normalize the provided path string:
     //  - collapse leading "./"
     //  - remove redundant "." components (without requiring the file to exist)
-    let normalized_path: PathBuf = Path::new(path_str).components().collect();
+    let normalized_path: PathBuf = Path::new(path_str)
+        .components()
+        .collect();
     let path = normalized_path.as_path();
 
     // Read current file content (handle new files for INSERT operations)
-    let content = if path.exists() {
+    let content = if path.exists()
+    {
         fs::read_to_string(path)
             .with_context(|| format!("Failed to read file: {}", path.display()))?
-    } else {
+    }
+    else
+    {
         // Check if all operations are INSERTs - new file creation
         let all_inserts = operations
             .iter()
             .all(|op| matches!(op, EditOperation::Insert { .. }));
-        if !all_inserts {
+        if !all_inserts
+        {
             anyhow::bail!(
                 "File {} does not exist and contains non-INSERT operations",
                 path.display()
@@ -170,15 +196,20 @@ fn generate_file_patch(
         }
         String::new() // Empty file for new file creation
     };
-    let file_lines: Vec<&str> = content.lines().collect();
+    let file_lines: Vec<&str> = content
+        .lines()
+        .collect();
 
     // Convert operations to hunks
     let hunks = operations_to_hunks(&file_lines, &operations, config)?;
 
     // Merge adjacent/overlapping hunks if requested
-    let merged_hunks = if config.merge_adjacent {
+    let merged_hunks = if config.merge_adjacent
+    {
         merge_adjacent_hunks(hunks, config.context_lines)
-    } else {
+    }
+    else
+    {
         hunks
     };
 
@@ -187,13 +218,15 @@ fn generate_file_patch(
     sorted_hunks.sort_by_key(|h| h.old_start);
 
     // Generate metadata
-    let source_cid = operations.first().and_then(|op| match op {
-        EditOperation::Replace {
-            guard_cid: Some(cid),
-            ..
-        } => Some(cid.clone()),
-        _ => None,
-    });
+    let source_cid = operations
+        .first()
+        .and_then(|op| {
+            match op
+            {
+                EditOperation::Replace { guard_cid: Some(cid), .. } => Some(cid.clone()),
+                _ => None,
+            }
+        });
 
     let metadata = PatchMetadata {
         source_cid,
@@ -202,7 +235,9 @@ fn generate_file_patch(
     };
 
     Ok(FilePatch {
-        path: normalized_path.to_string_lossy().to_string(),
+        path: normalized_path
+            .to_string_lossy()
+            .to_string(),
         hunks: sorted_hunks,
         metadata,
     })
@@ -213,10 +248,12 @@ fn operations_to_hunks(
     file_lines: &[&str],
     operations: &[&EditOperation],
     config: &PatchConfig,
-) -> Result<Vec<Hunk>> {
+) -> Result<Vec<Hunk>>
+{
     let mut hunks = Vec::new();
 
-    for op in operations {
+    for op in operations
+    {
         let hunk = operation_to_hunk(file_lines, op, config)?;
         hunks.push(hunk);
     }
@@ -229,17 +266,21 @@ fn operation_to_hunk(
     file_lines: &[&str],
     operation: &EditOperation,
     config: &PatchConfig,
-) -> Result<Hunk> {
-    match operation {
+) -> Result<Hunk>
+{
+    match operation
+    {
         EditOperation::Replace {
             start_line,
             end_line,
             old_content,
             new_content,
             guard_cid,
-        } => {
+        } =>
+        {
             // Validate against file content if guard present
-            if config.validate_guards {
+            if config.validate_guards
+            {
                 validate_operation_content(
                     file_lines,
                     *start_line,
@@ -254,11 +295,15 @@ fn operation_to_hunk(
             let _old_count = old_end - old_start + 1;
 
             // Parse new content into lines
-            let new_lines: Vec<&str> = new_content.lines().collect();
+            let new_lines: Vec<&str> = new_content
+                .lines()
+                .collect();
             let new_count = new_lines.len();
 
             // Build hunk with context - fix off-by-one near EOF
-            let context_start = old_start.saturating_sub(config.context_lines).max(1);
+            let context_start = old_start
+                .saturating_sub(config.context_lines)
+                .max(1);
             let context_end = old_end
                 .saturating_add(config.context_lines)
                 .min(file_lines.len())
@@ -267,25 +312,30 @@ fn operation_to_hunk(
             let mut hunk_lines = Vec::new();
 
             // Add leading context
-            for line_num in context_start..old_start {
+            for line_num in context_start..old_start
+            {
                 let line = file_lines[line_num - 1]; // Convert to 0-based
                 hunk_lines.push(HunkLine::Context(line.to_string()));
             }
 
             // Add removed lines
-            for line_num in old_start..=old_end {
+            for line_num in old_start..=old_end
+            {
                 let line = file_lines[line_num - 1]; // Convert to 0-based
                 hunk_lines.push(HunkLine::Remove(line.to_string()));
             }
 
             // Add new lines
-            for new_line in &new_lines {
+            for new_line in &new_lines
+            {
                 hunk_lines.push(HunkLine::Add(new_line.to_string()));
             }
 
             // Add trailing context
-            for line_num in (old_end + 1)..=context_end {
-                if line_num <= file_lines.len() {
+            for line_num in (old_end + 1)..=context_end
+            {
+                if line_num <= file_lines.len()
+                {
                     let line = file_lines[line_num - 1]; // Convert to 0-based
                     hunk_lines.push(HunkLine::Context(line.to_string()));
                 }
@@ -306,48 +356,61 @@ fn operation_to_hunk(
                 lines: hunk_lines,
             })
         }
-        EditOperation::Insert {
-            at_line,
-            new_content,
-        } => {
+        EditOperation::Insert { at_line, new_content } =>
+        {
             let insert_pos = *at_line; // 0 means beginning, N means after line N
-            let new_lines: Vec<&str> = new_content.lines().collect();
+            let new_lines: Vec<&str> = new_content
+                .lines()
+                .collect();
 
             // Context around insertion point - handle empty files
-            let context_start = if file_lines.is_empty() {
+            let context_start = if file_lines.is_empty()
+            {
                 1 // Start at line 1 for empty files
-            } else {
-                insert_pos.saturating_sub(config.context_lines).max(1)
+            }
+            else
+            {
+                insert_pos
+                    .saturating_sub(config.context_lines)
+                    .max(1)
             };
             let context_end = (insert_pos + config.context_lines).min(file_lines.len());
 
             let mut hunk_lines = Vec::new();
 
             // Add leading context
-            for line_num in context_start..=insert_pos.min(file_lines.len()) {
-                if line_num > 0 && line_num <= file_lines.len() {
+            for line_num in context_start..=insert_pos.min(file_lines.len())
+            {
+                if line_num > 0 && line_num <= file_lines.len()
+                {
                     let line = file_lines[line_num - 1];
                     hunk_lines.push(HunkLine::Context(line.to_string()));
                 }
             }
 
             // Add new lines
-            for new_line in &new_lines {
+            for new_line in &new_lines
+            {
                 hunk_lines.push(HunkLine::Add(new_line.to_string()));
             }
 
             // Add trailing context
-            for line_num in (insert_pos + 1)..=context_end {
-                if line_num <= file_lines.len() {
+            for line_num in (insert_pos + 1)..=context_end
+            {
+                if line_num <= file_lines.len()
+                {
                     let line = file_lines[line_num - 1];
                     hunk_lines.push(HunkLine::Context(line.to_string()));
                 }
             }
 
             // Calculate counts safely to avoid underflow
-            let old_count = if context_end >= context_start {
+            let old_count = if context_end >= context_start
+            {
                 context_end - context_start + 1
-            } else {
+            }
+            else
+            {
                 0 // Empty file case
             };
 
@@ -359,33 +422,37 @@ fn operation_to_hunk(
                 lines: hunk_lines,
             })
         }
-        EditOperation::Delete {
-            start_line,
-            end_line,
-        } => {
+        EditOperation::Delete { start_line, end_line } =>
+        {
             let delete_count = end_line - start_line + 1;
 
             // Context around deletion
-            let context_start = start_line.saturating_sub(config.context_lines).max(1);
+            let context_start = start_line
+                .saturating_sub(config.context_lines)
+                .max(1);
             let context_end = (end_line + config.context_lines).min(file_lines.len());
 
             let mut hunk_lines = Vec::new();
 
             // Add leading context
-            for line_num in context_start..*start_line {
+            for line_num in context_start..*start_line
+            {
                 let line = file_lines[line_num - 1];
                 hunk_lines.push(HunkLine::Context(line.to_string()));
             }
 
             // Add deleted lines
-            for line_num in *start_line..=*end_line {
+            for line_num in *start_line..=*end_line
+            {
                 let line = file_lines[line_num - 1];
                 hunk_lines.push(HunkLine::Remove(line.to_string()));
             }
 
             // Add trailing context
-            for line_num in (*end_line + 1)..=context_end {
-                if line_num <= file_lines.len() {
+            for line_num in (*end_line + 1)..=context_end
+            {
+                if line_num <= file_lines.len()
+                {
                     let line = file_lines[line_num - 1];
                     hunk_lines.push(HunkLine::Context(line.to_string()));
                 }
@@ -409,24 +476,30 @@ fn validate_operation_content(
     end_line: usize,
     old_content: &str,
     guard_cid: &Option<String>,
-) -> Result<()> {
+) -> Result<()>
+{
     // Extract actual content from file
     let actual_lines = &file_lines[(start_line - 1)..end_line]; // Convert to 0-based
     let actual_content = actual_lines.join("\n");
 
     // Use same validation logic as EditEngine
-    if let Some(expected_cid) = guard_cid {
+    if let Some(expected_cid) = guard_cid
+    {
         let actual_cid = generate_cid(&actual_content);
-        if expected_cid != &actual_cid {
+        if expected_cid != &actual_cid
+        {
             anyhow::bail!(
                 "Content mismatch: expected CID {}, got {}",
                 expected_cid,
                 actual_cid
             );
         }
-    } else {
+    }
+    else
+    {
         // Compare normalized content
-        if normalize_for_cid(old_content) != normalize_for_cid(&actual_content) {
+        if normalize_for_cid(old_content) != normalize_for_cid(&actual_content)
+        {
             anyhow::bail!("OLD content mismatch at lines {}-{}", start_line, end_line);
         }
     }
@@ -435,23 +508,36 @@ fn validate_operation_content(
 }
 
 /// Merge adjacent hunks to reduce patch complexity
-fn merge_adjacent_hunks(hunks: Vec<Hunk>, context_lines: usize) -> Vec<Hunk> {
-    if hunks.len() <= 1 {
+fn merge_adjacent_hunks(
+    hunks: Vec<Hunk>,
+    context_lines: usize,
+) -> Vec<Hunk>
+{
+    if hunks.len() <= 1
+    {
         return hunks;
     }
 
     let mut merged = Vec::new();
     let mut current = hunks[0].clone();
 
-    for next in hunks.into_iter().skip(1) {
+    for next in hunks
+        .into_iter()
+        .skip(1)
+    {
         // Check if hunks are close enough to merge
         let current_end_inclusive = current.old_start + current.old_count - 1;
-        let gap = next.old_start.saturating_sub(current_end_inclusive + 1);
+        let gap = next
+            .old_start
+            .saturating_sub(current_end_inclusive + 1);
 
-        if gap <= context_lines * 2 {
+        if gap <= context_lines * 2
+        {
             // Merge hunks
             current = merge_two_hunks(current, next);
-        } else {
+        }
+        else
+        {
             // Too far apart, keep separate
             merged.push(current);
             current = next;
@@ -463,10 +549,18 @@ fn merge_adjacent_hunks(hunks: Vec<Hunk>, context_lines: usize) -> Vec<Hunk> {
 }
 
 /// Merge two adjacent hunks with overlap-aware line handling
-fn merge_two_hunks(mut first: Hunk, second: Hunk) -> Hunk {
+fn merge_two_hunks(
+    mut first: Hunk,
+    second: Hunk,
+) -> Hunk
+{
     // Check if contexts overlap or touch
     let first_end = first.old_start + first.old_count;
-    if first_end >= second.old_start.saturating_sub(1) {
+    if first_end
+        >= second
+            .old_start
+            .saturating_sub(1)
+    {
         // Merge hunks
         let new_old_end =
             (first.old_start + first.old_count).max(second.old_start + second.old_count);
@@ -479,56 +573,79 @@ fn merge_two_hunks(mut first: Hunk, second: Hunk) -> Hunk {
         // Merge lines by deduplicating overlapping context
         first.lines = merge_hunk_lines(&first.lines, &second.lines);
         first
-    } else {
+    }
+    else
+    {
         // Too far apart - concatenate without overlap
         first.old_count = (second.old_start + second.old_count) - first.old_start;
         first.new_count = (second.new_start + second.new_count) - first.new_start;
-        first.lines.extend(second.lines);
+        first
+            .lines
+            .extend(second.lines);
         first
     }
 }
 
 /// Merge hunk lines while removing duplicate context
-fn merge_hunk_lines(first_lines: &[HunkLine], second_lines: &[HunkLine]) -> Vec<HunkLine> {
+fn merge_hunk_lines(
+    first_lines: &[HunkLine],
+    second_lines: &[HunkLine],
+) -> Vec<HunkLine>
+{
     let mut result = first_lines.to_vec();
 
     // Find trailing context lines in first hunk
     let mut first_context_end = first_lines.len();
-    while first_context_end > 0 {
-        if let HunkLine::Context(_) = &first_lines[first_context_end - 1] {
+    while first_context_end > 0
+    {
+        if let HunkLine::Context(_) = &first_lines[first_context_end - 1]
+        {
             first_context_end -= 1;
-        } else {
+        }
+        else
+        {
             break;
         }
     }
 
     // Find leading context lines in second hunk
     let mut second_context_start = 0;
-    while second_context_start < second_lines.len() {
-        if let HunkLine::Context(_) = &second_lines[second_context_start] {
+    while second_context_start < second_lines.len()
+    {
+        if let HunkLine::Context(_) = &second_lines[second_context_start]
+        {
             second_context_start += 1;
-        } else {
+        }
+        else
+        {
             break;
         }
     }
 
     // Remove potential duplicate context (simple string comparison)
     let overlap_size = (first_lines.len() - first_context_end).min(second_context_start);
-    if overlap_size > 0 {
+    if overlap_size > 0
+    {
         // Check if the contexts actually overlap
         let mut overlaps = true;
-        for i in 0..overlap_size {
+        for i in 0..overlap_size
+        {
             let first_idx = first_context_end + i;
             let second_idx = i;
-            if first_idx < first_lines.len() && second_idx < second_lines.len() {
-                match (&first_lines[first_idx], &second_lines[second_idx]) {
-                    (HunkLine::Context(a), HunkLine::Context(b)) => {
-                        if a != b {
+            if first_idx < first_lines.len() && second_idx < second_lines.len()
+            {
+                match (&first_lines[first_idx], &second_lines[second_idx])
+                {
+                    (HunkLine::Context(a), HunkLine::Context(b)) =>
+                    {
+                        if a != b
+                        {
                             overlaps = false;
                             break;
                         }
                     }
-                    _ => {
+                    _ =>
+                    {
                         overlaps = false;
                         break;
                     }
@@ -536,14 +653,19 @@ fn merge_hunk_lines(first_lines: &[HunkLine], second_lines: &[HunkLine]) -> Vec<
             }
         }
 
-        if overlaps {
+        if overlaps
+        {
             // Skip the overlapping context in second hunk
             result.extend_from_slice(&second_lines[overlap_size..]);
-        } else {
+        }
+        else
+        {
             // No overlap, just concatenate
             result.extend_from_slice(second_lines);
         }
-    } else {
+    }
+    else
+    {
         result.extend_from_slice(second_lines);
     }
 
@@ -551,10 +673,12 @@ fn merge_hunk_lines(first_lines: &[HunkLine], second_lines: &[HunkLine]) -> Vec<
 }
 
 /// Render patch set as unified diff string
-pub fn render_unified_diff(patch_set: &PatchSet) -> String {
+pub fn render_unified_diff(patch_set: &PatchSet) -> String
+{
     let mut output = String::new();
 
-    for file_patch in &patch_set.file_patches {
+    for file_patch in &patch_set.file_patches
+    {
         render_file_patch(&mut output, file_patch);
     }
 
@@ -562,13 +686,25 @@ pub fn render_unified_diff(patch_set: &PatchSet) -> String {
 }
 
 /// Render a single file patch
-fn render_file_patch(output: &mut String, file_patch: &FilePatch) {
+fn render_file_patch(
+    output: &mut String,
+    file_patch: &FilePatch,
+)
+{
     // Add metadata comment
     output.push_str(&format!(
         "# RUP: CID={} CONTEXT={} ENGINE={}\n",
-        file_patch.metadata.source_cid.as_deref().unwrap_or("none"),
-        file_patch.metadata.context_lines,
-        file_patch.metadata.engine
+        file_patch
+            .metadata
+            .source_cid
+            .as_deref()
+            .unwrap_or("none"),
+        file_patch
+            .metadata
+            .context_lines,
+        file_patch
+            .metadata
+            .engine
     ));
 
     // Standard git diff header
@@ -580,13 +716,18 @@ fn render_file_patch(output: &mut String, file_patch: &FilePatch) {
     output.push_str(&format!("+++ b/{}\n", file_patch.path));
 
     // Render each hunk
-    for hunk in &file_patch.hunks {
+    for hunk in &file_patch.hunks
+    {
         render_hunk(output, hunk);
     }
 }
 
 /// Render a single hunk
-fn render_hunk(output: &mut String, hunk: &Hunk) {
+fn render_hunk(
+    output: &mut String,
+    hunk: &Hunk,
+)
+{
     // Hunk header
     output.push_str(&format!(
         "@@ -{},{} +{},{} @@\n",
@@ -594,8 +735,10 @@ fn render_hunk(output: &mut String, hunk: &Hunk) {
     ));
 
     // Render lines
-    for line in &hunk.lines {
-        match line {
+    for line in &hunk.lines
+    {
+        match line
+        {
             HunkLine::Context(content) => output.push_str(&format!(" {}\n", content)),
             HunkLine::Remove(content) => output.push_str(&format!("-{}\n", content)),
             HunkLine::Add(content) => output.push_str(&format!("+{}\n", content)),
@@ -604,15 +747,19 @@ fn render_hunk(output: &mut String, hunk: &Hunk) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::core::edit::{EditOperation, EditSpec, FileBlock};
+mod tests
+{
     // use std::path::PathBuf; // Not needed in test
     use std::io::Write;
+
     use tempfile::NamedTempFile;
 
+    use super::*;
+    use crate::core::edit::{EditOperation, EditSpec, FileBlock};
+
     #[test]
-    fn test_simple_replace_patch() {
+    fn test_simple_replace_patch()
+    {
         let mut temp_file = NamedTempFile::new().unwrap();
         writeln!(temp_file, "line 1").unwrap();
         writeln!(temp_file, "line 2").unwrap();
@@ -620,7 +767,9 @@ mod tests {
 
         let spec = EditSpec {
             file_blocks: vec![FileBlock {
-                path: temp_file.path().to_path_buf(),
+                path: temp_file
+                    .path()
+                    .to_path_buf(),
                 operations: vec![EditOperation::Replace {
                     start_line: 2,
                     end_line: 2,
@@ -634,9 +783,19 @@ mod tests {
         let config = PatchConfig::default();
         let patch_set = generate_patches(&spec, &config).unwrap();
 
-        assert_eq!(patch_set.file_patches.len(), 1);
+        assert_eq!(
+            patch_set
+                .file_patches
+                .len(),
+            1
+        );
         let file_patch = &patch_set.file_patches[0];
-        assert_eq!(file_patch.hunks.len(), 1);
+        assert_eq!(
+            file_patch
+                .hunks
+                .len(),
+            1
+        );
 
         let diff = render_unified_diff(&patch_set);
         assert!(diff.contains("diff --git"));
@@ -645,14 +804,17 @@ mod tests {
     }
 
     #[test]
-    fn test_insert_patch() {
+    fn test_insert_patch()
+    {
         let mut temp_file = NamedTempFile::new().unwrap();
         writeln!(temp_file, "line 1").unwrap();
         writeln!(temp_file, "line 2").unwrap();
 
         let spec = EditSpec {
             file_blocks: vec![FileBlock {
-                path: temp_file.path().to_path_buf(),
+                path: temp_file
+                    .path()
+                    .to_path_buf(),
                 operations: vec![EditOperation::Insert {
                     at_line: 1,
                     new_content: "inserted line".to_string(),

@@ -3,15 +3,17 @@
 // human output, when such parity is promised.
 // If your CLI prints only JSON when --json is passed, this test
 // simply validates the JSON contains essential fields.
+use std::process::Command;
+
 use assert_cmd::prelude::*;
 use assert_fs::prelude::*;
 use serde_json::Value;
-use std::process::Command;
 
 // Test: verify essential JSON fields exist and basic types are
 // as expected to ensure downstream tooling stability.
 #[test]
-fn test_json_schema_core_fields() {
+fn test_json_schema_core_fields()
+{
     // Prepare a tiny project fixture in a temp directory.
     let tmp = assert_fs::TempDir::new().expect("tempdir");
     tmp.child("src/lib.rs")
@@ -43,22 +45,50 @@ fn test_json_schema_core_fields() {
     // Parse stdout JSON to a Value for schema checks.
     let v: Value = serde_json::from_slice(&out).expect("json");
     // Check our actual JSON schema: items[] with each having id, content, and tokens
-    let items = v.get("items").and_then(|i| i.as_array()).unwrap();
+    let items = v
+        .get("items")
+        .and_then(|i| i.as_array())
+        .unwrap();
     assert!(
         !items.is_empty(),
         "items array should contain at least one entry"
     );
-    for it in items {
+    for it in items
+    {
         // Each item should have an id string for identification
-        assert!(it.get("id").and_then(|p| p.as_str()).is_some());
+        assert!(
+            it.get("id")
+                .and_then(|p| p.as_str())
+                .is_some()
+        );
         // Each item should have content text
-        assert!(it.get("content").and_then(|c| c.as_str()).is_some());
+        assert!(
+            it.get("content")
+                .and_then(|c| c.as_str())
+                .is_some()
+        );
         // Each item should have token count
-        assert!(it.get("tokens").and_then(|t| t.as_u64()).is_some());
+        assert!(
+            it.get("tokens")
+                .and_then(|t| t.as_u64())
+                .is_some()
+        );
     }
 
     // Check top-level fields match our schema
-    assert!(v.get("model").and_then(|m| m.as_str()).is_some());
-    assert!(v.get("budget").and_then(|b| b.as_u64()).is_some());
-    assert!(v.get("total_tokens").and_then(|t| t.as_u64()).is_some());
+    assert!(
+        v.get("model")
+            .and_then(|m| m.as_str())
+            .is_some()
+    );
+    assert!(
+        v.get("budget")
+            .and_then(|b| b.as_u64())
+            .is_some()
+    );
+    assert!(
+        v.get("total_tokens")
+            .and_then(|t| t.as_u64())
+            .is_some()
+    );
 }

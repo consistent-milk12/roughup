@@ -1,21 +1,25 @@
 //! Robust parsing for "<path>:<ranges>" with Windows support.
 
-use anyhow::{Context, Result, bail};
 use std::path::PathBuf;
+
+use anyhow::{Context, Result, bail};
 
 /// Single extraction target: one file + merged line ranges.
 #[derive(Debug, Clone)]
-pub struct ExtractionTarget {
+pub struct ExtractionTarget
+{
     /// File path as provided (for display/ordering).
     pub file: PathBuf,
     /// Inclusive 1-based line ranges, merged and sorted.
     pub ranges: Vec<(usize, usize)>,
 }
 
-impl ExtractionTarget {
+impl ExtractionTarget
+{
     /// Parse a target string like
     /// "src/main.rs:1-5,10-15" or "C:\\src\\lib.rs:20-25".
-    pub fn parse(input: &str) -> Result<Self> {
+    pub fn parse(input: &str) -> Result<Self>
+    {
         // Normalize and trim surrounding whitespace
         let s = input.trim();
 
@@ -24,23 +28,32 @@ impl ExtractionTarget {
         let mut it = s.rsplitn(2, ':');
 
         // Extract the tail part: ranges spec
-        let ranges_str = it.next().context("missing range spec after ':'")?.trim();
+        let ranges_str = it
+            .next()
+            .context("missing range spec after ':'")?
+            .trim();
 
         // Extract the head part: path string
-        let path_str = it.next().context("missing file path before ':'")?.trim();
+        let path_str = it
+            .next()
+            .context("missing file path before ':'")?
+            .trim();
 
         // Build a PathBuf preserving the user's spelling
         let file = PathBuf::from(path_str);
 
         // Parse the comma-separated ranges
         let mut ranges: Vec<(usize, usize)> = Vec::new();
-        for seg in ranges_str.split(',') {
+        for seg in ranges_str.split(',')
+        {
             let seg = seg.trim();
-            if seg.is_empty() {
+            if seg.is_empty()
+            {
                 continue;
             }
             // Support "N" and "A-B" patterns
-            if let Some((a, b)) = seg.split_once('-') {
+            if let Some((a, b)) = seg.split_once('-')
+            {
                 let a: usize = a
                     .trim()
                     .parse()
@@ -50,19 +63,24 @@ impl ExtractionTarget {
                     .parse()
                     .with_context(|| format!("invalid end: {seg}"))?;
 
-                if a == 0 || b == 0 {
+                if a == 0 || b == 0
+                {
                     bail!("line numbers must be >= 1: {seg}");
                 }
 
-                if a > b {
+                if a > b
+                {
                     bail!("start > end in range: {seg}");
                 }
                 ranges.push((a, b));
-            } else {
+            }
+            else
+            {
                 let n: usize = seg
                     .parse()
                     .with_context(|| format!("invalid line: {seg}"))?;
-                if n == 0 {
+                if n == 0
+                {
                     bail!("line numbers must be >= 1: {seg}");
                 }
                 ranges.push((n, n));
@@ -70,7 +88,8 @@ impl ExtractionTarget {
         }
 
         // Require at least one range
-        if ranges.is_empty() {
+        if ranges.is_empty()
+        {
             bail!("no valid ranges in: {input}");
         }
 
@@ -78,11 +97,14 @@ impl ExtractionTarget {
         ranges.sort_unstable_by_key(|r| r.0);
         let mut merged: Vec<(usize, usize)> = Vec::with_capacity(ranges.len());
 
-        for (s, e) in ranges {
+        for (s, e) in ranges
+        {
             if let Some(last) = merged.last_mut()
                 && s <= last.1 + 1
             {
-                last.1 = last.1.max(e);
+                last.1 = last
+                    .1
+                    .max(e);
                 continue;
             }
 
@@ -90,9 +112,6 @@ impl ExtractionTarget {
         }
 
         // Emit normalized target
-        Ok(Self {
-            file,
-            ranges: merged,
-        })
+        Ok(Self { file, ranges: merged })
     }
 }

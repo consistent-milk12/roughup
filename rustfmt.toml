@@ -1,0 +1,51 @@
+# ============================================
+# Personal Rustfmt Configuration
+# Optimized for Visual Cues & Low Cognitive Load
+# ============================================
+
+# -------- Core Layout --------
+max_width = 100   # Narrow wrap for easier scanning
+hard_tabs = false # Use spaces for indentation
+tab_spaces = 4    # Spaces per indent
+edition = "2024"  # Rust edition
+
+# -------- Braces & Blocks --------
+brace_style = "AlwaysNextLine"         # Opening brace on its own line
+control_brace_style = "AlwaysNextLine"
+force_multiline_blocks = true          # Always use braces for single statements
+
+# -------- Expressions & Chains --------
+chain_width = 0                    # One call per line → clearer inlay hints
+fn_call_width = 60                 # Break long function calls
+attr_fn_like_width = 60            # Break macro calls too
+single_line_if_else_max_width = 50 # Break early for readability
+struct_lit_width = 50              # Vertical struct initialization
+
+fn_params_layout = "Vertical" # One parameter per line
+where_single_line = false     # Always expand where-clauses
+
+use_small_heuristics = "Off" # Prefer multi-line expansion
+
+overflow_delimited_expr = true # Keep long delimited exprs on own lines
+
+# -------- Strings & Comments --------
+format_strings = true     # Wrap long strings
+wrap_comments = true      # Wrap comments to fit width
+normalize_comments = true # Normalize comment style
+comment_width = 90        # Slightly under max_width for comfort
+
+# -------- Imports --------
+reorder_imports = true             # Group and sort imports
+imports_granularity = "Crate"      # Merge same‑crate imports
+group_imports = "StdExternalCrate" # Group std / external / crate-local
+
+# -------- Misc --------
+newline_style = "Unix"            # LF only
+blank_lines_upper_bound = 1       # Avoid vertical drift
+type_punctuation_density = "Wide" # Extra spacing around ::, ->, etc.
+
+# -------- Nightly-only (enable with `unstable_features = true`) --------
+# unstable_features = true
+format_macro_bodies = true         # Format bodies of macro_rules!
+format_macro_matchers = true       # Format macro matchers
+format_code_in_doc_comments = true # Reflow code blocks in doc comments

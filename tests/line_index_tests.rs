@@ -3,7 +3,8 @@
 use roughup::infra::line_index::NewlineIndex;
 
 #[test]
-fn empty_buffer_has_zero_lines() {
+fn empty_buffer_has_zero_lines()
+{
     let bytes = b"";
     let idx = NewlineIndex::build(bytes);
     assert_eq!(idx.line_count(), 0);
@@ -12,7 +13,8 @@ fn empty_buffer_has_zero_lines() {
 }
 
 #[test]
-fn single_line_no_newline() {
+fn single_line_no_newline()
+{
     let bytes = b"abc";
     let idx = NewlineIndex::build(bytes);
     assert_eq!(idx.line_count(), 1);
@@ -24,7 +26,8 @@ fn single_line_no_newline() {
 }
 
 #[test]
-fn lf_three_lines_with_trailing_nl() {
+fn lf_three_lines_with_trailing_nl()
+{
     let bytes = b"a\nbcd\nef\n";
     // positions: '\n' at 1, 5, 8
     let idx = NewlineIndex::build(bytes);
@@ -36,7 +39,9 @@ fn lf_three_lines_with_trailing_nl() {
     assert_eq!(idx.byte_range_for_lines(2, 2, bytes), Some((2, 5)));
 
     // Lines 2..3: "bcd\nef"
-    let (s, e) = idx.byte_range_for_lines(2, 3, bytes).unwrap();
+    let (s, e) = idx
+        .byte_range_for_lines(2, 3, bytes)
+        .unwrap();
     assert_eq!(&bytes[s..e], b"bcd\nef");
 
     // Byte→line mapping
@@ -47,7 +52,8 @@ fn lf_three_lines_with_trailing_nl() {
 }
 
 #[test]
-fn crlf_three_lines_without_final_nl() {
+fn crlf_three_lines_without_final_nl()
+{
     let bytes = b"a\r\nbcd\r\nef";
     // positions: '\n' at 2, 7
     let idx = NewlineIndex::build(bytes);
@@ -65,7 +71,9 @@ fn crlf_three_lines_without_final_nl() {
     assert_eq!(&bytes[3..6], b"bcd");
 
     // Lines 2..3: "bcd\r\nef" (line 3 ends at EOF)
-    let (s, e) = idx.byte_range_for_lines(2, 3, bytes).unwrap();
+    let (s, e) = idx
+        .byte_range_for_lines(2, 3, bytes)
+        .unwrap();
     assert_eq!(&bytes[s..e], b"bcd\r\nef");
 
     // Byte→line mapping
@@ -76,7 +84,8 @@ fn crlf_three_lines_without_final_nl() {
 }
 
 #[test]
-fn out_of_range_requests_return_none() {
+fn out_of_range_requests_return_none()
+{
     let bytes = b"x\ny";
     let idx = NewlineIndex::build(bytes);
     assert_eq!(idx.line_count(), 2);

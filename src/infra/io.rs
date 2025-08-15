@@ -1,19 +1,24 @@
+use std::{fs::File, path::Path};
+
 use anyhow::{Context, Result};
 use memmap2::Mmap;
-use std::fs::File;
-use std::path::Path;
 
 const MMAP_THRESHOLD: u64 = 1024 * 1024; // 1 MiB
 
-pub enum FileContent {
+pub enum FileContent
+{
     Mapped(Mmap),
     Buffered(String),
 }
 
-impl AsRef<str> for FileContent {
-    fn as_ref(&self) -> &str {
-        match self {
-            FileContent::Mapped(mmap) => {
+impl AsRef<str> for FileContent
+{
+    fn as_ref(&self) -> &str
+    {
+        match self
+        {
+            FileContent::Mapped(mmap) =>
+            {
                 // Safety: We assume the file contains valid UTF-8
                 // In production, we should handle invalid UTF-8 gracefully
                 std::str::from_utf8(mmap).unwrap_or("")
@@ -23,12 +28,14 @@ impl AsRef<str> for FileContent {
     }
 }
 
-pub fn read_file_smart<P: AsRef<Path>>(path: P) -> Result<FileContent> {
+pub fn read_file_smart<P: AsRef<Path>>(path: P) -> Result<FileContent>
+{
     let path = path.as_ref();
     let metadata = std::fs::metadata(path)
         .with_context(|| format!("Failed to read metadata for {}", path.display()))?;
 
-    if metadata.len() > MMAP_THRESHOLD {
+    if metadata.len() > MMAP_THRESHOLD
+    {
         // Use memory mapping for large files
         let file =
             File::open(path).with_context(|| format!("Failed to open file {}", path.display()))?;
@@ -38,7 +45,9 @@ pub fn read_file_smart<P: AsRef<Path>>(path: P) -> Result<FileContent> {
             .with_context(|| format!("Failed to memory-map {}", path.display()))?;
 
         Ok(FileContent::Mapped(mmap))
-    } else {
+    }
+    else
+    {
         // Read small files into memory
         let content = std::fs::read_to_string(path)
             .with_context(|| format!("Failed to read file {}", path.display()))?;
@@ -49,7 +58,11 @@ pub fn read_file_smart<P: AsRef<Path>>(path: P) -> Result<FileContent> {
 
 /// Extract inclusive 1-based line ranges as a single String.
 /// Ranges must be validated and merged by the caller.
-pub fn extract_lines(content: &str, ranges: &[(usize, usize)]) -> Result<String> {
+pub fn extract_lines(
+    content: &str,
+    ranges: &[(usize, usize)],
+) -> Result<String>
+{
     // Work in bytes; validate once then slice cheaply
     let bytes = content.as_bytes();
 
@@ -57,7 +70,8 @@ pub fn extract_lines(content: &str, ranges: &[(usize, usize)]) -> Result<String>
     let idx = crate::infra::line_index::NewlineIndex::build(bytes);
 
     // Short-circuit empty files
-    if idx.line_count() == 0 {
+    if idx.line_count() == 0
+    {
         return Ok(String::new());
     }
 
@@ -66,9 +80,13 @@ pub fn extract_lines(content: &str, ranges: &[(usize, usize)]) -> Result<String>
     let mut out = String::with_capacity(ranges.len() * 60);
 
     // Append each range in order, separating ranges with '\n'
-    for (i, &(s, e)) in ranges.iter().enumerate() {
+    for (i, &(s, e)) in ranges
+        .iter()
+        .enumerate()
+    {
         // Validate line bounds
-        if s == 0 || s > e || s > idx.line_count() {
+        if s == 0 || s > e || s > idx.line_count()
+        {
             anyhow::bail!("invalid range: {s}-{e}");
         }
 
@@ -84,7 +102,8 @@ pub fn extract_lines(content: &str, ranges: &[(usize, usize)]) -> Result<String>
         out.push_str(&content[lo..hi]);
 
         // Separate consecutive ranges with a single newline
-        if i + 1 != ranges.len() {
+        if i + 1 != ranges.len()
+        {
             out.push('\n');
         }
     }
@@ -93,8 +112,10 @@ pub fn extract_lines(content: &str, ranges: &[(usize, usize)]) -> Result<String>
     Ok(out)
 }
 
-pub fn merge_overlapping_ranges(mut ranges: Vec<(usize, usize)>) -> Vec<(usize, usize)> {
-    if ranges.is_empty() {
+pub fn merge_overlapping_ranges(mut ranges: Vec<(usize, usize)>) -> Vec<(usize, usize)>
+{
+    if ranges.is_empty()
+    {
         return ranges;
     }
 
@@ -103,14 +124,18 @@ pub fn merge_overlapping_ranges(mut ranges: Vec<(usize, usize)>) -> Vec<(usize, 
 
     let mut merged = vec![ranges[0]];
 
-    for &(start, end) in &ranges[1..] {
+    for &(start, end) in &ranges[1..]
+    {
         let last_idx = merged.len() - 1;
         let (last_start, last_end) = merged[last_idx];
 
-        if start <= last_end + 1 {
+        if start <= last_end + 1
+        {
             // Overlapping or adjacent ranges - merge them
             merged[last_idx] = (last_start, end.max(last_end));
-        } else {
+        }
+        else
+        {
             // Non-overlapping range
             merged.push((start, end));
         }
@@ -120,11 +145,13 @@ pub fn merge_overlapping_ranges(mut ranges: Vec<(usize, usize)>) -> Vec<(usize, 
 }
 
 #[cfg(test)]
-mod tests {
+mod tests
+{
     use super::*;
 
     #[test]
-    fn test_merge_overlapping_ranges() {
+    fn test_merge_overlapping_ranges()
+    {
         assert_eq!(
             merge_overlapping_ranges(vec![(1, 3), (2, 5), (7, 9)]),
             vec![(1, 5), (7, 9)]
@@ -142,7 +169,8 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_lines() {
+    fn test_extract_lines()
+    {
         let content = "line1\nline2\nline3\nline4\nline5";
 
         let result = extract_lines(content, &[(2, 3)]).unwrap();

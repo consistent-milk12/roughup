@@ -4,7 +4,8 @@ use roughup::cli::{AppContext, Cli, Commands};
 
 // Added comment for test
 
-fn main() -> Result<()> {
+fn main() -> Result<()>
+{
     let cli = Cli::parse();
 
     // Build a context once, pass everywhere
@@ -16,7 +17,8 @@ fn main() -> Result<()> {
         dry_run: cli.dry_run,
     };
 
-    match cli.command {
+    match cli.command
+    {
         Commands::Extract(args) => roughup::core::extract_run(args, &ctx),
 
         Commands::Tree(args) => roughup::tree_run(args, &ctx),

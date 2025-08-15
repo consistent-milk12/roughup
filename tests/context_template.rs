@@ -2,15 +2,17 @@
 // and that template placeholders are honored in the output.
 // It assumes your CLI supports --template <file> and includes
 // template metadata back into the JSON summary for parity.
+use std::process::Command;
+
 use assert_cmd::prelude::*;
 use assert_fs::prelude::*;
 use predicates::prelude::*;
-use std::process::Command;
 
 // Test: the provided template should influence output in a
 // detectable way (e.g., a marker string included in stdout).
 #[test]
-fn test_template_override_is_applied() {
+fn test_template_override_is_applied()
+{
     // Create a small fixture project to feed the command.
     let tmp = assert_fs::TempDir::new().expect("tempdir");
     tmp.child("src/main.rs")
@@ -31,7 +33,8 @@ fn test_template_override_is_applied() {
         .arg("--budget")
         .arg("400")
         .assert();
-    // The process should complete successfully and stdout should contain the unique template marker string.
+    // The process should complete successfully and stdout should contain the unique template
+    // marker string.
     assert
         .success()
         .stdout(predicate::str::contains("__TEMPLATE_MARKER__"));
