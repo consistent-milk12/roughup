@@ -1,44 +1,41 @@
-# CLAUDE.md
+# CLAUDE.md - Roughup Quality Protocol
 
-## Core Behavioral Rules
+## Core Rule: Quality Over Velocity
+User is permanent project memory. Always ask "why" and "where" before implementing.
 
-1. No icons, always formal tone
-2. Absolute token efficiency (both input and output)
-3. Code only when explicitly asked - developer prefers autonomy
-4. Provide production-grade architectural, performance, and systems insights
-5. Read TODO.md after CLAUDE.md for project context
-6. Direct answers only - no preamble or explanations unless requested
-7. Use existing patterns and conventions from codebase
-8. Prefer parallel tool calls for efficiency
-9. Never assume library availability - verify first
+## Pre-Implementation Protocol
+Before any struct/enum/function/trait:
+1. **"Why was [related component] implemented this way?"**
+2. **"Where should I examine for context?"** (never blind search)
+3. **"How does this affect our SLAs?"** (<2s context, <300ms rollback)
 
-## Response Guidelines
+## Critical Constraints
+- **Performance**: Respect existing SLAs, discuss hot-path allocations
+- **Safety**: Preserve atomic guarantees, BLAKE3 checksums, repo boundaries
+- **Architecture**: Align with Phase 3.5 (conflict resolution), Priority/SymbolRanker systems
 
-- One-word answers when possible
-- Avoid "Here is...", "Based on...", explanatory text
-- Use TodoWrite for multi-step tasks
-- Mark todos complete immediately upon finishing
-- Reference code as `file:line` format
-- Run lint/typecheck after changes
+## Mandatory Development Workflow
+**Context Assembly**: Before implementing any feature, ALWAYS use `rup context` with proper budgeting to gather relevant context. This serves dual purposes:
+- **Quality**: Ensures implementation aligns with existing patterns and architecture
+- **Validation**: Tests our flagship context assembly functionality during development
 
-## Implementation Efficiency Rules
+Example: `rup context --budget 4000 --template feature "resolve" "conflict" "SmartMerge" --semantic`
 
-- When complete code is provided, implement directly without context analysis
-- Skip codebase exploration if implementation details are already specified
-- Use context extraction only for incomplete/partial implementations
-- Choose most direct path: complete code → direct write, partial code → analyze then implement
-- Never read existing files to understand patterns if implementation already follows them
+## Session Enforcement
+**Start**: Acknowledge CLAUDE.md + TODO.md + **lib.rs** (mandatory full read), confirm current phase
+- **lib.rs**: Project architecture blueprint - explains modules, performance targets, strategic re-exports
+- **Use lib.rs**: To identify `rup context` keywords and understand module relationships before implementing
+**Mid-session** (every 5-7 exchanges): "Am I maintaining quality-first approach?"
+**Rule violation**: User says "PAUSE" → re-read rules, restart with discovery questions
 
-## File Operations
+## Implementation Efficiency
+- Complete specs → implement directly
+- Partial specs → ask "Where should I examine patterns?"
+- All code → compact inline comments, `file:line` references
 
-- Edit existing files over creating new ones
-- Never create documentation unless explicitly requested
-- Verify parent directories before file operations
-- Use absolute paths consistently
-
-## Security & Quality
-
-- No secrets in code or commits
-- Follow security best practices
-- Verify solutions with tests when available
-- Check existing test frameworks before assuming
+## Insights Format
+```
+★ Insight ─────────────────────────────────────
+[2-3 key points specific to implementation]
+─────────────────────────────────────────────────
+```

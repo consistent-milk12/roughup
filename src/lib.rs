@@ -41,6 +41,14 @@ pub mod core {
     pub mod apply_engine;
     pub use apply_engine::{ApplyEngine, ApplyReport, Engine, Preview, create_engine};
 
+    /// Git conflict marker detection and resolution (Phase 3.5)
+    pub mod conflict;
+    pub use conflict::{ConflictMarker, ConflictOrigin, ConflictType, parse_conflicts, score_conflict};
+
+    /// Conflict resolution strategies with SmartMerge pipeline
+    pub mod resolve;
+    pub use resolve::{Resolution, ResolveStrategy, resolve, resolve_no_check, resolve_batch, run as resolve_run};
+
     /// Tree-sitter symbol extraction pipeline (Rust+Python locked, 572 lines)
     pub mod symbols;
     pub use symbols::{Symbol, SymbolKind, Visibility, run as symbols_run};

@@ -14,11 +14,12 @@ use crate::cli::{
     AppContext, ApplyArgs, BackupArgs, BackupCleanupArgs, BackupListArgs, BackupRestoreArgs,
     BackupShowArgs, BackupSubcommand, CheckSyntaxArgs, PreviewArgs,
 };
-use crate::core::apply_engine::create_engine;
 use crate::core::backup_ops::{
     CleanupRequest, ListRequest, RestoreRequest, SessionInfo, ShowRequest, cleanup_sessions,
     list_sessions_filtered, restore_session, show_session,
 };
+use crate::core::resolve::run as resolve_run;
+use crate::core::{BackupManager, apply_engine::create_engine};
 
 /// Content ID for change detection (xxh64 hash)
 pub type ContentId = String;
@@ -1195,19 +1196,91 @@ pub fn apply_run(args: ApplyArgs, ctx: &AppContext) -> Result<()> {
         }
     }
 
-    // 8) Check for conflicts and exit if in preview mode
+    // 8) Check for conflicts and handle resolution strategy
     if !preview.conflicts.is_empty() {
         if !ctx.quiet {
             eprintln!("Found {} conflicts:", preview.conflicts.len());
             for conflict in &preview.conflicts {
                 eprintln!("  • {}", conflict);
             }
-            eprintln!("Suggestion: Use --engine=git --mode=3way for robust conflict resolution");
+            if args.resolve {
+                eprintln!("Attempting auto-resolution with smart conflict detection...");
+            } else {
+                eprintln!(
+                    "Suggestion: Use --resolve for auto-resolution or --engine=git --git-mode=3way"
+                );
+            }
         }
 
-        if !args.force {
+        // If --resolve flag is set and we're applying (not just previewing), try to resolve conflicts
+        if args.resolve && run_mode == RunMode::Apply {
+            // Let the resolver manage its own backup session.
+
+            // Attempt to resolve conflicts on all files that would be modified
+            let mut resolved_count = 0;
+
+            for file_block in &spec.file_blocks {
+                if file_block.path.exists() {
+                    // Check if this file has git conflict markers
+                    let resolve_args = crate::cli::ResolveArgs {
+                        paths: vec![file_block.path.clone()],
+                        strategy: crate::core::resolve::ResolveStrategy::Smart,
+                        auto_resolve_safe: true,
+                        show_diff: false,
+                        repo_root: repo_root.clone(),
+                        backup: true, // Ensure safety: resolver creates session
+                        apply: true,
+                        json: false,
+                    };
+
+                    // Run conflict resolution on this file
+                    match resolve_run(resolve_args, ctx) {
+                        Ok(()) => {
+                            resolved_count += 1;
+                            if !ctx.quiet {
+                                eprintln!(
+                                    "  ✓ Resolved conflicts in {}",
+                                    file_block.path.display()
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            if !ctx.quiet {
+                                eprintln!(
+                                    "  ✗ Could not resolve conflicts in {}: {}",
+                                    file_block.path.display(),
+                                    e
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+
+            if resolved_count > 0 && !ctx.quiet {
+                eprintln!(
+                    "Resolved conflicts in {} files. Re-attempting apply...",
+                    resolved_count
+                );
+            }
+
+            // Re-run conflict check after resolution attempt
+            let updated_preview = engine.check(&spec).map_err(|e| {
+                let (kind, _code) = normalize_err_typed(e);
+                ApplyCliError::from(kind)
+            })?;
+
+            // If conflicts still remain and not forced, exit
+            if !updated_preview.conflicts.is_empty() && !args.force {
+                return Err(ApplyCliError::Conflicts(format!(
+                    "{} conflicts remain after auto-resolution. Use --force to apply despite conflicts.",
+                    updated_preview.conflicts.len()
+                ))
+                .into());
+            }
+        } else if !args.force {
             return Err(ApplyCliError::Conflicts(format!(
-                "{} conflicts detected. Use --force to apply despite conflicts.",
+                "{} conflicts detected. Use --resolve for auto-resolution or --force to apply despite conflicts.",
                 preview.conflicts.len()
             ))
             .into());
@@ -1222,7 +1295,7 @@ pub fn apply_run(args: ApplyArgs, ctx: &AppContext) -> Result<()> {
     // 10) Apply for real - set up backup session if enabled
     let report = if args.backup {
         // Create backup manager and use contextual API
-        let mut backup_manager = crate::core::backup::BackupManager::begin(
+        let mut backup_manager = BackupManager::begin(
             repo_root.as_ref().unwrap_or(&cwd),
             match args.engine {
                 crate::cli::ApplyEngine::Internal => "internal",

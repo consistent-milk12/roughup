@@ -38,5 +38,7 @@ fn main() -> Result<()> {
         Commands::Completions(args) => roughup::completion::run(args, &ctx),
 
         Commands::Context(args) => roughup::core::context::run(args, &ctx),
+
+        Commands::Resolve(args) => roughup::core::resolve_run(args, &ctx),
     }
 }

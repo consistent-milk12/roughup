@@ -101,13 +101,21 @@ fn resolve_top_level(cwd: &Path) -> Result<PathBuf> {
 
 /// Ensure `target` stays within `meta.top_level`.
 pub fn ensure_within_repo(meta: &RepoMeta, target: &Path) -> Result<()> {
-    let abs = if target.is_absolute() {
+    // Build absolute candidate; canonicalize if possible. For new files,
+    // fall back to canonicalizing the parent and re-joining the filename.
+    let joined = if target.is_absolute() {
         target.to_path_buf()
     } else {
         meta.top_level.join(target)
-    }
-    .canonicalize()
-    .context("canonicalize failed")?;
+    };
+    let abs = match joined.canonicalize() {
+        Ok(p) => p,
+        Err(_) => {
+            let parent = joined.parent().unwrap_or(&meta.top_level);
+            let base = parent.canonicalize().unwrap_or_else(|_| meta.top_level.clone());
+            base.join(joined.file_name().unwrap_or_default())
+        }
+    };
     let top = meta
         .top_level
         .canonicalize()

@@ -1,187 +1,192 @@
-# Roughup CLI Guide for Web Chat with AI Models
+# Roughup Context Assembly Guide for Web Chat AI
 
-I'm using **Roughup** (`rup`), a privacy-first Rust CLI tool for LLM-assisted code editing (Only tested for Rust currently). All operations are local-only with atomic backups. Here's how to use it throughout our session:
+I'm using **Roughup** (`rup`), a privacy-first Rust CLI for LLM-assisted development. This guide focuses on **context assembly** workflow for web chat sessions.
 
-## Core Workflow Commands
+## Session Startup Protocol
 
-### 1. **Project Structure** (`rup tree --clipboard`)
+**Required Reading Order**:
 
-```bash
-rup tree --clipboard
-```
-
-- Copies repository structure to clipboard
-- Shows file organization and hierarchy
-- Use when I need to understand project layout
-
-### 2. **Smart Context Assembly** (`rup context --clipboard`)
+1. **TODO.md** - Current project priorities and session goals
+2. **lib.rs** - Architecture blueprint and module relationships
+3. **Context Assembly** - Use this guide for all subsequent context needs
 
 ```bash
-# Basic context extraction
-rup context --clipboard "function_name"
-rup context --clipboard "ClassName" "method_name"
-
-# With semantic search and template
-rup context --clipboard --semantic --template refactor "function_name"
-rup context --clipboard --template bugfix "error_handling"
-rup context --clipboard --template feature "new_component"
-
-# Budget-aware (default 6000 tokens)
-rup context --clipboard --budget 8000 "complex_system"
+# Always start here for project understanding
+rup context --budget 4000 TODO.md lib.rs --clipboard
 ```
 
-- Extracts relevant code with token budgeting
-- Supports exact, fuzzy, and semantic matching
-- Templates: `refactor`, `bugfix`, `feature`, `freeform`
-- Automatically copies to clipboard for pasting here
+## Core Context Assembly Patterns
 
-### 3. **File Content Extraction** (`rup extract --clipboard`)
+### **Pattern 1: Feature Development Context**
 
 ```bash
-# Extract specific files
-rup extract --clipboard src/main.rs src/lib.rs
+# Before implementing any new feature
+rup context --budget 4000 --template feature "new_feature_name" "related_module" --semantic --clipboard
 
-# Extract with line ranges
-rup extract --clipboard src/core/edit.rs:100-200
-
-# Extract multiple ranges from same file
-rup extract --clipboard src/parser.rs:1-50,150-200
+# Example: Adding conflict resolution
+rup context --budget 4000 --template feature "resolve" "conflict" "SmartMerge" --semantic --clipboard
 ```
 
-- Extracts specific files or line ranges
-- Preserves line numbers for accurate editing
-- Use when you need specific file content
-
-### 4. **Edit Preview** (`rup preview`)
+### **Pattern 2: Bug Investigation Context**
 
 ```bash
-# Preview from clipboard (your EBNF edit spec)
-rup preview --clipboard
+# When fixing bugs or understanding error flows
+rup context --budget 3000 --template bugfix "error_function" "failure_path" --clipboard
 
-# Preview from file
-rup preview edit_spec.ebnf
+# Example: Fix apply engine issues
+rup context --budget 3000 --template bugfix "apply_run" "ApplyEngine" "conflict" --clipboard
 ```
 
-- Shows exactly what changes will be made
-- Validates EBNF syntax before applying
-- No modifications until `apply`
-
-### 5. **Apply Changes** (`rup apply --clipboard`)
+### **Pattern 3: Refactoring Context**
 
 ```bash
-# Apply from clipboard (your EBNF edit spec)
-rup apply --clipboard
+# Before refactoring existing code
+rup context --budget 5000 --template refactor "target_module" "affected_functions" --semantic --clipboard
 
-# Safe apply with preview confirmation
-rup apply --clipboard --interactive
-
-# Apply from file
-rup apply edit_spec.ebnf
+# Example: Refactor edit engine
+rup context --budget 5000 --template refactor "EditEngine" "apply" "parse_edit_spec" --semantic --clipboard
 ```
 
-- Atomic edits with automatic backups
-- Validates all operations before applying
-- Creates backup session for rollback
-
-## EBNF Edit Format (What You Generate)
-
-When providing edits, use this exact format:
-
-````ebnf
-FILE: path/to/file.rs
-REPLACE lines 10-15:
-OLD:
-```rust
-fn old_function() {
-    println!("old code");
-}
-````
-
-NEW:
-
-```rust
-fn new_function() {
-    println!("new code");
-}
-```
-
-FILE: path/to/another.rs
-INSERT at 25:
-NEW:
-
-```rust
-// New code block
-fn helper() {}
-```
-
-FILE: path/to/third.rs
-DELETE lines 5-8:
-OLD:
-
-```rust
-// Code to remove
-let unused = true;
-```
-
-````
-
-## Backup Management
+### **Pattern 4: Architecture Understanding**
 
 ```bash
-# List backup sessions
-rup backup list
+# Deep-dive into system architecture
+rup context --budget 6000 --template freeform "core_concept" "integration_point" --semantic --clipboard
 
-# Show specific backup details
-rup backup show <session-id>
-
-# Restore from backup
-rup backup restore <session-id>
-````
-
-## Advanced Context Options
-
-```bash
-# Anchor-based proximity ranking
-rup context --clipboard --anchor src/core/main.rs --anchor-line 100 "function"
-
-# Limit candidates and output
-rup context --clipboard --top-per-query 5 --limit 50 "search_term"
-
-# JSON output for structured data
-rup context --json "function" > context.json
+# Example: Understanding backup system
+rup context --budget 6000 --template freeform "BackupManager" "session" "atomic" --semantic --clipboard
 ```
 
-## Session Workflow
+## Advanced Context Strategies
 
-1. **Start with structure**: `rup tree --clipboard` → paste here
-2. **Get context**: `rup context --clipboard --template [type] "targets"` → paste here
-3. **You provide EBNF edits** → I copy to clipboard
-4. **Preview changes**: `rup preview --clipboard` → verify output
-5. **Apply safely**: `rup apply --clipboard`
-6. **Repeat as needed** with new context extractions
+### **Multi-Round Context Assembly**
 
-## Key Benefits
+```bash
+# Round 1: High-level architecture
+rup context --budget 2000 "module_name" --semantic --clipboard
 
-- **Privacy**: All processing local, no network calls
-- **Safety**: Atomic operations with automatic backups
-- **Speed**: <2s context assembly, <300ms operations
-- **Deterministic**: Same input = same output across sessions
-- **Smart**: Symbol indexing, relevance ranking, token budgeting
+# Round 2: Implementation details
+rup context --budget 3000 --anchor src/core/target.rs "specific_function" --clipboard
 
-## Error Recovery
+# Round 3: Integration points
+rup context --budget 2000 "related_trait" "interface" --semantic --clipboard
+```
 
-- All operations create backups automatically
-- Use `rup backup list` to see available restore points
-- `rup backup restore <id>` for instant rollback
-- Edit conflicts show clear resolution paths
+### **Anchor-Based Proximity**
 
-## Performance Notes
+```bash
+# Focus context around specific files/locations
+rup context --budget 4000 --anchor src/core/edit.rs --anchor-line 1200 "resolve" "conflict" --clipboard
 
-- Run `rup symbols` once per session to build index
-- Context assembly: <2s typical, <5s for large codebases
-- Token estimation includes all major models (GPT-4, Claude, etc.)
-- Budget defaults to 6000 tokens (configurable)
+# Multiple anchors for cross-module context
+rup context --budget 5000 --anchor src/cli.rs --anchor src/main.rs "command" "dispatch" --clipboard
+```
+
+### **Budget-Optimized Context**
+
+```bash
+# Large context for complex tasks
+rup context --budget 8000 --template feature "complex_system" --semantic --clipboard
+
+# Focused context for quick fixes
+rup context --budget 2000 "specific_function" --clipboard
+
+# Balanced context for typical development
+rup context --budget 4000 "target_area" --semantic --clipboard
+```
+
+## Context Quality Validation
+
+### **Template Selection Guide**
+
+- **`feature`**: New functionality, additions, enhancements
+- **`bugfix`**: Error investigation, fixes, debugging
+- **`refactor`**: Code restructuring, optimization, cleanup
+- **`freeform`**: Architecture understanding, exploration
+
+### **Semantic Search Benefits**
+
+```bash
+# Without semantic: exact string matching only
+rup context --budget 4000 "apply" --clipboard
+
+# With semantic: conceptually related code included
+rup context --budget 4000 "apply" --semantic --clipboard
+```
+
+### **Budget Guidelines**
+
+- **2000-3000**: Quick context, specific functions
+- **4000-5000**: Standard development context
+- **6000-8000**: Complex features, architecture deep-dives
+- **8000+**: Large refactoring, system-wide changes
+
+## Mandatory Development Workflow
+
+1. **Context First**: Always use `rup context` before implementing
+2. **Quality Over Speed**: Ask "why" and "where" before coding
+3. **Architecture Alignment**: Use lib.rs keywords for context terms
+4. **Performance Awareness**: Respect <2s context, <300ms rollback SLAs
+
+```bash
+# Example: Before adding any struct/enum/function/trait
+rup context --budget 4000 --template feature "similar_pattern" "integration_point" --semantic --clipboard
+```
+
+## Web Chat Integration
+
+### **Optimal Session Flow**
+
+1. **Startup Context**:
+
+   ```bash
+   rup context --budget 4000 TODO.md lib.rs --clipboard
+   ```
+
+2. **Feature Context**:
+
+   ```bash
+   rup context --budget 4000 --template feature "target" "related" --semantic --clipboard
+   ```
+
+3. **Implementation Context**:
+
+   ```bash
+   rup context --budget 3000 --anchor src/target/file.rs "specific_function" --clipboard
+   ```
+
+4. **Validation Context**:
+   ```bash
+   rup context --budget 2000 "test" "validation" --semantic --clipboard
+   ```
+
+### **Context Refresh Triggers**
+
+- **Every 5-7 exchanges**: Refresh context for current area
+- **New task/feature**: Fresh context assembly with appropriate template
+- **Error investigation**: Bugfix template with error-related terms
+- **Architecture questions**: Freeform template with system concepts
+
+## Performance & Quality Targets
+
+- **Assembly Time**: <2s typical, <5s for large contexts
+- **Deterministic Output**: Same terms = same context across runs
+- **Token Accuracy**: Precise budgeting with model-specific encoding
+- **Relevance Ranking**: Priority system with proximity/semantic scoring
+
+## Integration with Development
+
+```bash
+# Validate context quality during development
+rup context --budget 4000 --template feature "implementation_area" --semantic --json | jq '.total_tokens'
+
+# Test different budget allocations
+rup context --budget 2000 "target" --clipboard  # Quick context
+rup context --budget 6000 "target" --semantic --clipboard  # Deep context
+```
 
 ---
 
-**Usage Pattern**: Use clipboard commands throughout our session. I'll provide the project context you need, you'll give me EBNF edits, and I'll apply them safely with atomic backups.
+**Core Principle**: Use `rup context` extensively with proper budgeting and templates. This serves dual purposes: ensures quality implementation aligned with existing architecture AND validates our flagship context assembly functionality during development.
+
+**Remember**: Context assembly is not just for getting code - it's for understanding the "why" and "where" that drives quality-first development.

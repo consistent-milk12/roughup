@@ -66,6 +66,9 @@ pub enum Commands {
 
     /// Assemble a smart, token-budgeted context for LLMs
     Context(ContextArgs),
+
+    /// Resolve Git conflict markers in files
+    Resolve(ResolveArgs),
 }
 
 #[derive(Parser)]
@@ -238,6 +241,10 @@ pub struct ApplyArgs {
     /// Output results in JSON format (single line)
     #[arg(long)]
     pub json: bool,
+
+    /// Auto-resolve conflicts using smart conflict resolution (uses backup)
+    #[arg(long)]
+    pub resolve: bool,
 }
 
 #[derive(Debug, Clone, ValueEnum)]
@@ -537,4 +544,40 @@ pub struct ContextArgs {
     /// Copy result to clipboard
     #[arg(long)]
     pub clipboard: bool,
+}
+
+#[derive(Parser, Debug)]
+pub struct ResolveArgs {
+    /// Files or directories to scan for conflicts
+    #[arg(value_name = "PATH", default_value = ".")]
+    pub paths: Vec<std::path::PathBuf>,
+
+    /// Resolution strategy: take-ours, take-theirs, take-base, interactive, smart
+    #[arg(long, value_enum, default_value = "smart")]
+    pub strategy: crate::core::resolve::ResolveStrategy,
+
+    /// Only apply resolutions with high confidence (smart strategy only)
+    #[arg(long)]
+    pub auto_resolve_safe: bool,
+
+    /// Show unified diff for resolved conflicts
+    #[arg(long)]
+    pub show_diff: bool,
+
+    /// Git repository root (auto-detected if not specified)
+    #[arg(long)]
+    pub repo_root: Option<std::path::PathBuf>,
+
+    /// Create backup session before resolution
+    #[arg(long, default_value = "true")]
+    #[arg(action = clap::ArgAction::Set)]
+    pub backup: bool,
+
+    /// Apply resolved changes to files (required for write operations)
+    #[arg(long)]
+    pub apply: bool,
+
+    /// Machine-readable JSON output
+    #[arg(long)]
+    pub json: bool,
 }
