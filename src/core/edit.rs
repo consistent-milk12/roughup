@@ -23,6 +23,13 @@ use crate::core::backup_ops::{
 /// Content ID for change detection (xxh64 hash)
 pub type ContentId = String;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MatchMode {
+    Line,
+    Token,
+    Auto,
+}
+
 /// Shared normalizer for both CID and OLD comparisons  
 pub fn normalize_for_cid(s: &str) -> String {
     // Split into lines, remove trailing spaces and '\r'
@@ -209,12 +216,12 @@ pub fn exit_code_for_typed(e: &ApplyErr) -> i32 {
 /// Returns Ok(None) when no repo is found. Callers must decide
 /// whether None is acceptable based on engine choice.
 pub fn discover_repo_root(explicit: Option<PathBuf>, start: &Path) -> Result<Option<PathBuf>> {
-    // 1) explicit override wins
+    // 1) explicit override wins (canonicalize for stable prefix math)
     if let Some(root) = explicit {
-        return Ok(Some(root));
+        return Ok(Some(root.canonicalize().unwrap_or(root)));
     }
 
-    // 2) git rev-parse
+    // 2) git rev-parse (worktree top-level), canonicalized
     if let Ok(output) = std::process::Command::new("git")
         .args(["rev-parse", "--show-toplevel"])
         .current_dir(start)
@@ -222,21 +229,19 @@ pub fn discover_repo_root(explicit: Option<PathBuf>, start: &Path) -> Result<Opt
         && output.status.success()
     {
         let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
-
         if !s.is_empty() {
-            return Ok(Some(PathBuf::from(s)));
+            let p = PathBuf::from(s);
+            return Ok(Some(p.canonicalize().unwrap_or(p)));
         }
     }
 
-    // 3) ascend to find .git (directory or worktree file)
+    // 3) ascend to find .git (directory or worktree file), canonicalized
     let mut cur = Some(start);
     while let Some(dir) = cur {
         let git_path = dir.join(".git");
-        if git_path.exists() {
-            // Check if it's a directory (.git directory) or file (git worktree)
-            if git_path.is_dir() || git_path.is_file() {
-                return Ok(Some(dir.to_path_buf()));
-            }
+        if git_path.exists() && (git_path.is_dir() || git_path.is_file()) {
+            let d = dir.to_path_buf();
+            return Ok(Some(d.canonicalize().unwrap_or(d)));
         }
         cur = dir.parent();
     }
@@ -1029,17 +1034,30 @@ impl EditEngine {
         });
 
         // Apply operations
+        // Apply operations with token-aware relocation
+        let matcher = TokenMatcher::new().ok(); // optional; None => line mode only
+
         for op in sorted_ops {
             match op {
                 EditOperation::Replace {
                     start_line,
                     end_line,
+                    old_content,
                     new_content,
                     ..
                 } => {
-                    // Replace lines (convert to 0-based indexing)
-                    let start_idx = start_line - 1;
-                    let end_idx = end_line;
+                    // Try to re-locate by tokens first (exact token subsequence),
+                    // then fall back to original line span.
+                    let (s, e) = if let Some(m) = &matcher {
+                        m.locate_exact(&file_lines, &old_content)
+                            .or(Some((start_line, end_line)))
+                    } else {
+                        Some((start_line, end_line))
+                    }
+                    .unwrap();
+
+                    let start_idx = s.saturating_sub(1);
+                    let end_idx = e;
 
                     let new_lines: Vec<String> =
                         new_content.lines().map(|s| s.to_string()).collect();
@@ -1049,11 +1067,11 @@ impl EditEngine {
                     at_line,
                     new_content,
                 } => {
-                    // Insert lines after at_line (0 means beginning)
+                    // Insert after re-located token match of the previous line if possible.
+                    // For v1 we keep the given at_line to avoid guessy behavior.
                     let insert_idx = at_line;
                     let new_lines: Vec<String> =
                         new_content.lines().map(|s| s.to_string()).collect();
-
                     for (i, line) in new_lines.into_iter().enumerate() {
                         file_lines.insert(insert_idx + i, line);
                     }
@@ -1062,10 +1080,9 @@ impl EditEngine {
                     start_line,
                     end_line,
                 } => {
-                    // Delete lines (convert to 0-based indexing)
+                    // For deletes, stick to provided span in v1 (token delete can come next)
                     let start_idx = start_line - 1;
                     let end_idx = end_line;
-
                     file_lines.drain(start_idx..end_idx);
                 }
             }
@@ -1269,6 +1286,48 @@ pub fn apply_run(args: ApplyArgs, ctx: &AppContext) -> Result<()> {
     }
 
     Ok(())
+}
+
+struct TokenMatcher {
+    bpe: tiktoken_rs::CoreBPE,
+}
+
+impl TokenMatcher {
+    fn new() -> anyhow::Result<Self> {
+        // Reuse your existing encodings; prefer o200k_base for breadth
+        let bpe = tiktoken_rs::o200k_base().context("token matcher bpe")?;
+        Ok(Self { bpe })
+    }
+
+    /// Find the first exact token-subsequence match of `needle_text` in `file_lines`.
+    /// Returns 1-based (start_line, end_line) on success.
+    fn locate_exact(&self, file_lines: &[String], needle_text: &str) -> Option<(usize, usize)> {
+        let hay = file_lines.join("\n");
+        let norm = normalize_for_cid(needle_text);
+        let hay_ids = self.bpe.encode_ordinary(&normalize_for_cid(&hay));
+        let nee_ids = self.bpe.encode_ordinary(&norm);
+        if nee_ids.is_empty() || hay_ids.len() < nee_ids.len() {
+            return None;
+        }
+        // Rabin-Karp style scan on token IDs (simple slice compare for v1)
+        // (Could be optimized with rolling hash later.)
+        for i in 0..=(hay_ids.len() - nee_ids.len()) {
+            if &hay_ids[i..i + nee_ids.len()] == nee_ids.as_slice() {
+                // Map back to line numbers by counting '\n' in the byte space of the match.
+                // To avoid re-tokenizing to bytes, slice on text using a cheap string search first.
+                if let Some(byte_lo) = hay.find(&norm) {
+                    let byte_hi = byte_lo + norm.len();
+                    let start_line = hay[..byte_lo].chars().filter(|&c| c == '\n').count() + 1;
+                    let end_line =
+                        start_line + hay[byte_lo..byte_hi].chars().filter(|&c| c == '\n').count();
+                    return Some((start_line, end_line.max(start_line)));
+                }
+                // Fallback: if normalized text find fails (rare), bail to None.
+                return None;
+            }
+        }
+        None
+    }
 }
 
 /// Convert Result<()> to exit codes for CLI harness

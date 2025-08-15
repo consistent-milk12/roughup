@@ -175,6 +175,13 @@ pub struct ChunkArgs {
     pub overlap: usize,
 }
 
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub enum MatchMode {
+    Line,
+    Token,
+    Auto,
+}
+
 #[derive(Parser)]
 pub struct ApplyArgs {
     /// Edit specification file to apply
@@ -191,6 +198,10 @@ pub struct ApplyArgs {
     /// Apply changes to files (required for write operations)
     #[arg(long)]
     pub apply: bool,
+
+    /// Matching strategy: line, token, or auto (token then line)
+    #[arg(long, value_enum, default_value = "auto")]
+    pub match_mode: MatchMode,
 
     /// Git repository root (auto-detected if not specified)
     #[arg(long)]
@@ -274,6 +285,10 @@ pub struct PreviewArgs {
     #[arg(long, default_value = "true")]
     pub show_diff: bool,
 
+    /// Matching strategy: line, token, or auto (token then line)
+    #[arg(long, value_enum, default_value = "auto")]
+    pub match_mode: MatchMode,
+
     /// Git repository root (auto-detected if not specified)
     #[arg(long)]
     pub repo_root: Option<PathBuf>,
@@ -298,7 +313,6 @@ pub struct PreviewArgs {
     #[arg(long, default_value = "3")]
     pub context_lines: usize,
 }
-
 #[derive(Parser)]
 pub struct CheckSyntaxArgs {
     /// Edit specification file to validate

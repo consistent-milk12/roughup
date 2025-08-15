@@ -753,7 +753,7 @@ fn build_diffs(
     Ok(out)
 }
 
-fn normalize_repo_rel(p: &Path) -> Result<PathBuf> {
+pub(crate) fn normalize_repo_rel(p: &Path) -> Result<PathBuf> {
     if p.is_absolute() {
         bail!("path must be repo-relative: {}", p.display());
     }

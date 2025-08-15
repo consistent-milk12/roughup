@@ -4,9 +4,9 @@
 //! for robust application with context matching and 3-way merging.
 
 use anyhow::{Context, Result};
-use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
+use std::{collections::BTreeMap, path::PathBuf};
 
 use crate::core::edit::{EditOperation, EditSpec, generate_cid, normalize_for_cid};
 
@@ -147,11 +147,16 @@ fn generate_file_patch(
     operations: Vec<&EditOperation>,
     config: &PatchConfig,
 ) -> Result<FilePatch> {
-    let path = Path::new(path_str);
+    // Normalize the provided path string:
+    //  - collapse leading "./"
+    //  - remove redundant "." components (without requiring the file to exist)
+    let normalized_path: PathBuf = Path::new(path_str).components().collect();
+    let path = normalized_path.as_path();
 
     // Read current file content (handle new files for INSERT operations)
     let content = if path.exists() {
-        fs::read_to_string(path).with_context(|| format!("Failed to read file: {}", path_str))?
+        fs::read_to_string(path)
+            .with_context(|| format!("Failed to read file: {}", path.display()))?
     } else {
         // Check if all operations are INSERTs - new file creation
         let all_inserts = operations
@@ -160,7 +165,7 @@ fn generate_file_patch(
         if !all_inserts {
             anyhow::bail!(
                 "File {} does not exist and contains non-INSERT operations",
-                path_str
+                path.display()
             );
         }
         String::new() // Empty file for new file creation
@@ -197,7 +202,7 @@ fn generate_file_patch(
     };
 
     Ok(FilePatch {
-        path: path_str.to_string(),
+        path: normalized_path.to_string_lossy().to_string(),
         hunks: sorted_hunks,
         metadata,
     })

@@ -83,16 +83,27 @@ pub trait ApplyEngine {
 /// Turns absolute file path into repo-relative path or errors.
 /// Enforces boundary to keep backups inside repo root.
 fn make_relative_to_repo(file_path: &Path, repo_root: &Path) -> Result<PathBuf> {
-    file_path
-        .strip_prefix(repo_root)
-        .map(|p| p.to_path_buf())
-        .with_context(|| {
-            format!(
-                "File {} is outside repository {}",
-                file_path.display(),
-                repo_root.display()
-            )
-        })
+    // Normalize repo root (prefer canonical, fall back to given)
+    let repo_abs = repo_root.canonicalize().unwrap_or_else(|_| repo_root.to_path_buf());
+
+    if file_path.is_absolute() {
+        // Absolute target: canonicalize if possible, then strip prefix
+        let abs = file_path.canonicalize().unwrap_or_else(|_| file_path.to_path_buf());
+        return abs
+            .strip_prefix(&repo_abs)
+            .map(|p| p.to_path_buf())
+            .with_context(|| {
+                format!(
+                    "File {} is outside repository {}",
+                    file_path.display(),
+                    repo_abs.display()
+                )
+            });
+    }
+
+    // Relative target: treat as repo-relative without touching the FS.
+    // Validate and normalize "..", "." etc. (disallow escape)
+    crate::core::backup_ops::normalize_repo_rel(file_path)
 }
 
 /// Internal engine implementation
