@@ -14,11 +14,11 @@
 //!   files follow lexicographic path order.
 //! - Anchor equality and scope checks are robust to abs/rel path mismatches.
 
-use std::borrow::Cow; // path views
-use std::cmp::Reverse; // sort keys
 use std::collections::HashSet; // history set
 use std::fs; // file IO
 use std::path::{Path, PathBuf}; // paths
+use std::{borrow::Cow, collections::BTreeSet}; // path views
+use std::{cmp::Reverse, collections::VecDeque}; // sort keys
 
 use anyhow::{Context, Result, bail}; // error context
 use indicatif::{ProgressBar, ProgressStyle}; // CLI progress
@@ -305,17 +305,24 @@ pub fn run(
 
     // 1) Collect fail signals if provided; fail closed = ignore on error
     let mut fail_signals: Vec<crate::core::fail_signal::FailSignal> = Vec::new();
-    if let Some(path) = args.fail_signal.as_ref() {
-        match fs::read_to_string(path) {
-            Ok(text) => {
+    if let Some(path) = args
+        .fail_signal
+        .as_ref()
+    {
+        match fs::read_to_string(path)
+        {
+            Ok(text) =>
+            {
                 // Auto-detect format via available parsers; fall back to rustc
                 // We avoid unwrap/panic: empty on detection failure.
                 let parsed = autodetect_and_parse(&text);
-                if !parsed.is_empty() {
+                if !parsed.is_empty()
+                {
                     fail_signals = parsed;
                 }
             }
-            Err(_e) => {
+            Err(_e) =>
+            {
                 // Graceful degrade: no-op when unreadable
             }
         }
@@ -354,7 +361,7 @@ pub fn run(
     };
 
     // Configure progress UI (hidden in --quiet mode)
-    let pb = if ctx.quiet
+    let _pb = if ctx.quiet
     {
         ProgressBar::hidden()
     }
@@ -374,21 +381,83 @@ pub fn run(
         pb
     };
 
+    // --- PATCH: Augment queries with trait-resolve and callgraph (deterministic) ---
+    let mut effective_queries: Vec<String> = args
+        .queries
+        .clone();
+    // Trait/impl surface
+    if let Some(q) = args
+        .trait_resolve
+        .as_ref()
+        && let Some((ty, method)) = parse_trait_resolve(q)
+    {
+        effective_queries.push(format!("trait {}", ty));
+        effective_queries.push(format!("impl {} for", ty));
+        effective_queries.push(format!("{}::{}", ty, method));
+    }
+
+    // Callgraph neighbors
+    if let Some(spec) = parse_callgraph_arg(
+        args.callgraph
+            .as_deref(),
+        args.anchor
+            .as_ref(),
+        args.anchor_line,
+    ) && let Some((apath, aline)) = spec.anchor
+        && let Some(func) = extract_function_name_at(&root, &apath, aline)
+    {
+        let names = collect_callgraph_names(&root, &apath, aline, &func, spec.depth);
+
+        for n in names
+        {
+            effective_queries.push(n);
+        }
+    }
+
+    // Dedup while preserving original order first, then lexicographic for derived
+    let mut seen = BTreeSet::new();
+    let mut deduped: Vec<String> = Vec::new();
+
+    for q in effective_queries.into_iter()
+    {
+        if seen.insert(q.clone())
+        {
+            deduped.push(q);
+        }
+    }
+
+    // Configure progress UI (hidden in --quiet mode); use deduped len for accuracy
+    let pb = if ctx.quiet
+    {
+        ProgressBar::hidden()
+    }
+    else
+    {
+        let pb = ProgressBar::new(deduped.len() as u64);
+        let style = ProgressStyle::default_bar()
+            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} {msg}")
+            .unwrap_or_else(|_| ProgressStyle::default_bar());
+        pb.set_style(style);
+        pb
+    };
+
     // Accumulate top-N ranked hits per query (stable across runs)
     let mut chosen: Vec<RankedSymbol> = Vec::new();
-    for q in &args.queries
+
+    for q in &deduped
     {
-        // Perform index lookup once per query with current options
         let mut hits = index.lookup(q, opts.clone());
-        // Apply the tier-aware top-per-query cap unless overridden
+
         if effective_top_per_query > 0 && hits.len() > effective_top_per_query
         {
             hits.truncate(effective_top_per_query);
         }
+
         chosen.extend(hits);
         pb.inc(1);
         pb.set_message(format!("matched '{}'", q));
     }
+
     pb.finish_and_clear();
 
     // Bail early if nothing matched for all queries
@@ -523,7 +592,8 @@ pub fn run(
     all_items.extend(items);
 
     // 3) Apply fail-signal boost (deterministic)
-    if !fail_signals.is_empty() {
+    if !fail_signals.is_empty()
+    {
         fail_signal_boost(&mut all_items, &fail_signals, &root);
     }
 
@@ -923,18 +993,26 @@ fn render_template(
 }
 
 /// Resolve template text from either preset or file path
-fn resolve_template_text(arg: &Option<TemplateArg>, queries: &[String]) -> Result<String> {
-    match arg {
-        Some(TemplateArg::Preset(p)) => {
+fn resolve_template_text(
+    arg: &Option<TemplateArg>,
+    queries: &[String],
+) -> Result<String>
+{
+    match arg
+    {
+        Some(TemplateArg::Preset(p)) =>
+        {
             // Use existing preset renderer
             Ok(render_template(*p, queries))
         }
-        Some(TemplateArg::Path(p)) => {
+        Some(TemplateArg::Path(p)) =>
+        {
             let raw = fs::read_to_string(p)
                 .with_context(|| format!("failed to read template file {}", p.display()))?;
             Ok(normalize_eol(&raw))
         }
-        None => {
+        None =>
+        {
             // default preset if --template omitted; keep prior behavior
             Ok(render_template(ContextTemplate::Freeform, queries))
         }
@@ -942,19 +1020,24 @@ fn resolve_template_text(arg: &Option<TemplateArg>, queries: &[String]) -> Resul
 }
 
 /// Simple EOL normalizer to keep manifest byte-identical across OSes
-fn normalize_eol(s: &str) -> String {
+fn normalize_eol(s: &str) -> String
+{
     let mut out = s.replace("\r\n", "\n");
-    if !out.ends_with('\n') { 
-        out.push('\n'); 
+    if !out.ends_with('\n')
+    {
+        out.push('\n');
     }
     out
 }
 
 /// Extract ContextTemplate for ranking factors
-fn extract_context_template(arg: &Option<TemplateArg>) -> Option<ContextTemplate> {
-    match arg {
+fn extract_context_template(arg: &Option<TemplateArg>) -> Option<ContextTemplate>
+{
+    match arg
+    {
         Some(TemplateArg::Preset(p)) => Some(*p),
-        Some(TemplateArg::Path(_)) => Some(ContextTemplate::Freeform), // treat file paths as freeform
+        Some(TemplateArg::Path(_)) => Some(ContextTemplate::Freeform), // treat file paths as
+        // freeform
         None => Some(ContextTemplate::Freeform),
     }
 }
@@ -1106,15 +1189,18 @@ fn in_anchor_dir(
 
 /// Minimal local auto-detect that defers to registered parsers in fail_signal.rs.
 /// This uses a conservative contract: try known parsers; return first non-empty.
-fn autodetect_and_parse(text: &str) -> Vec<crate::core::fail_signal::FailSignal> {
+fn autodetect_and_parse(text: &str) -> Vec<crate::core::fail_signal::FailSignal>
+{
     use crate::core::fail_signal::FailSignalParser;
-    
+
     // The packet states RustcParser exists; attempt it first.
     // If more parsers are exported, insert here in fixed order for determinism.
     let parsers: [&dyn FailSignalParser; 1] = [&crate::core::fail_signal::RustcParser];
-    for p in parsers {
+    for p in parsers
+    {
         let out = p.parse(text);
-        if !out.is_empty() {
+        if !out.is_empty()
+        {
             return out;
         }
     }
@@ -1124,8 +1210,14 @@ fn autodetect_and_parse(text: &str) -> Vec<crate::core::fail_signal::FailSignal>
 /// Boost priorities for items proximal to fail signals.
 /// Deterministic: stable boost, stable sort by (priority desc, id asc).
 /// Complexity: O(n log n) over items.
-fn fail_signal_boost(items: &mut [Item], signals: &[crate::core::fail_signal::FailSignal], root: &Path) {
-    if signals.is_empty() {
+fn fail_signal_boost(
+    items: &mut [Item],
+    signals: &[crate::core::fail_signal::FailSignal],
+    root: &Path,
+)
+{
+    if signals.is_empty()
+    {
         return;
     }
 
@@ -1135,34 +1227,50 @@ fn fail_signal_boost(items: &mut [Item], signals: &[crate::core::fail_signal::Fa
         .iter()
         .map(|s| {
             // FailSignal contract: file, line_hits, severity
-            let w = match s.severity {
+            let w = match s.severity
+            {
                 crate::core::fail_signal::Severity::Error => 3.0_f32,
                 crate::core::fail_signal::Severity::Warn => 1.5_f32,
                 crate::core::fail_signal::Severity::Info => 1.0_f32,
             };
-            (s.file.clone(), &s.line_hits, w)
+            (
+                s.file
+                    .clone(),
+                &s.line_hits,
+                w,
+            )
         })
         .collect();
 
     // Apply boosts
-    for item in items.iter_mut() {
+    for item in items.iter_mut()
+    {
         // Skip template items
-        if item.id.starts_with("__") {
+        if item
+            .id
+            .starts_with("__")
+        {
             continue;
         }
 
         // Parse item ID to extract file path and line range
         // Format: "path/to/file.rs:start-end"
-        let (item_file, start_line, end_line) = if let Some(parsed) = parse_item_id(&item.id, root) {
+        let (item_file, start_line, end_line) = if let Some(parsed) = parse_item_id(&item.id, root)
+        {
             parsed
-        } else {
+        }
+        else
+        {
             continue;
         };
 
         let mut boost = 0.0_f32;
-        for (signal_file, line_hits, weight) in &sigs {
-            if same_file(root, &item_file, signal_file) {
-                for &signal_line in line_hits.iter() {
+        for (signal_file, line_hits, weight) in &sigs
+        {
+            if same_file(root, &item_file, signal_file)
+            {
+                for &signal_line in line_hits.iter()
+                {
                     let distance = distance_to_span(signal_line as u32, start_line, end_line);
                     // Inverse-distance weighting; bounded, stable.
                     // 1/(1+d) avoids div by zero and extreme spikes.
@@ -1173,12 +1281,13 @@ fn fail_signal_boost(items: &mut [Item], signals: &[crate::core::fail_signal::Fa
             }
         }
 
-        if boost > 0.0 {
+        if boost > 0.0
+        {
             // Apply a gentle multiplier + additive nudge to preserve ordering when equal.
             let old_priority = item.priority;
             let multiplier = (1.0_f32 + (boost * 0.15_f32)).min(1.5_f32);
             let additive = (boost * 0.05_f32).min(0.5_f32);
-            
+
             item.priority = Priority::custom(
                 (old_priority.level as f32 * multiplier + additive * 255.0).min(255.0) as u8,
                 (old_priority.relevance * multiplier + additive * 0.1).min(1.0),
@@ -1190,37 +1299,361 @@ fn fail_signal_boost(items: &mut [Item], signals: &[crate::core::fail_signal::Fa
 
 /// Parse item ID to extract file path and line range
 /// Returns (file_path, start_line, end_line) or None if parsing fails
-fn parse_item_id(id: &str, root: &Path) -> Option<(PathBuf, u32, u32)> {
+fn parse_item_id(
+    id: &str,
+    root: &Path,
+) -> Option<(PathBuf, u32, u32)>
+{
     // Format: "path/to/file.rs:start-end"
     let colon_pos = id.rfind(':')?;
     let file_part = &id[..colon_pos];
     let line_part = &id[colon_pos + 1..];
-    
+
     // Parse line range "start-end"
     let dash_pos = line_part.find('-')?;
     let start_str = &line_part[..dash_pos];
     let end_str = &line_part[dash_pos + 1..];
-    
-    let start_line: u32 = start_str.parse().ok()?;
-    let end_line: u32 = end_str.parse().ok()?;
-    
+
+    let start_line: u32 = start_str
+        .parse()
+        .ok()?;
+    let end_line: u32 = end_str
+        .parse()
+        .ok()?;
+
     // Convert to absolute path if relative
-    let file_path = if Path::new(file_part).is_absolute() {
+    let file_path = if Path::new(file_part).is_absolute()
+    {
         PathBuf::from(file_part)
-    } else {
+    }
+    else
+    {
         root.join(file_part)
     };
-    
+
     Some((file_path, start_line, end_line))
 }
 
 /// Calculate distance from a line to a span
-fn distance_to_span(line: u32, start: u32, end: u32) -> u32 {
-    if line < start {
+fn distance_to_span(
+    line: u32,
+    start: u32,
+    end: u32,
+) -> u32
+{
+    if line < start
+    {
         start - line
-    } else if line > end {
+    }
+    else if line > end
+    {
         line.saturating_sub(end)
-    } else {
+    }
+    else
+    {
         0
     }
+}
+
+// --- PATCH: Augment queries with trait-resolve and callgraph ---
+pub fn parse_trait_resolve(s: &str) -> Option<(String, String)>
+{
+    let mut parts = s.splitn(2, "::");
+    let ty = parts
+        .next()?
+        .trim();
+    let method = parts
+        .next()?
+        .trim();
+    if ty.is_empty() || method.is_empty()
+    {
+        return None;
+    }
+    Some((ty.to_string(), method.to_string()))
+}
+
+pub struct CallgraphSpec
+{
+    pub anchor: Option<(PathBuf, usize)>,
+    pub depth: u8,
+}
+
+/// Parse callgraph arg "anchor=path:line depth=N".
+pub fn parse_callgraph_arg(
+    raw: Option<&str>,
+    fallback_path: Option<&PathBuf>,
+    fallback_line: Option<usize>,
+) -> Option<CallgraphSpec>
+{
+    let mut depth: u8 = 1;
+    let mut anchor: Option<(PathBuf, usize)> = None;
+    if let Some(s) = raw
+    {
+        for token in s.split_whitespace()
+        {
+            if let Some(rest) = token.strip_prefix("depth=")
+            {
+                if let Ok(n) = rest.parse::<u8>()
+                {
+                    depth = n.clamp(1, 3); // Clamp for SLA
+                }
+            }
+            else if let Some(rest) = token.strip_prefix("anchor=")
+                && let Some((p, l)) = parse_path_line(rest)
+            {
+                anchor = Some((p, l));
+            }
+        }
+    }
+
+    if anchor.is_none()
+        && let (Some(p), Some(l)) = (fallback_path, fallback_line)
+    {
+        anchor = Some((p.clone(), l));
+    }
+
+    anchor.as_ref()?;
+
+    Some(CallgraphSpec { anchor, depth })
+}
+
+pub fn parse_path_line(s: &str) -> Option<(PathBuf, usize)>
+{
+    let (p, l) = s.rsplit_once(':')?;
+    let line = l
+        .parse::<usize>()
+        .ok()?;
+    Some((PathBuf::from(p), line))
+}
+
+/// Extract a likely function name around the given line.
+pub fn extract_function_name_at(
+    root: &Path,
+    path: &Path,
+    line: usize,
+) -> Option<String>
+{
+    let text = fs::read_to_string(root.join(path)).ok()?;
+    let lines: Vec<&str> = text
+        .lines()
+        .collect();
+
+    if lines.is_empty()
+    {
+        return None;
+    }
+
+    let idx = line
+        .saturating_sub(1)
+        .min(
+            lines
+                .len()
+                .saturating_sub(1),
+        );
+    let lo = idx.saturating_sub(80);
+    let hi = (idx + 80).min(
+        lines
+            .len()
+            .saturating_sub(1),
+    );
+
+    for i in (lo..=idx).rev()
+    {
+        if let Some(name) = parse_fn_decl(lines[i])
+        {
+            return Some(name);
+        }
+    }
+
+    for line in &lines[idx..=hi]
+    {
+        if let Some(name) = parse_fn_decl(line)
+        {
+            return Some(name);
+        }
+    }
+    None
+}
+
+fn parse_fn_decl(line: &str) -> Option<String>
+{
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while i + 3 <= bytes.len()
+    {
+        if bytes[i] == b'f'
+            && bytes[i + 1] == b'n'
+            && is_space(
+                bytes
+                    .get(i + 2)
+                    .copied(),
+            )
+        {
+            let mut j = i + 2;
+            while j < bytes.len() && is_space(Some(bytes[j]))
+            {
+                j += 1;
+            }
+            let (name, k) = take_ident(bytes, j)?;
+            let mut m = k;
+            while m < bytes.len() && is_space(Some(bytes[m]))
+            {
+                m += 1;
+            }
+            if m < bytes.len() && bytes[m] == b'('
+            {
+                return Some(name);
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+fn is_space(b: Option<u8>) -> bool
+{
+    matches!(b, Some(b' ' | b'\t'))
+}
+
+fn take_ident(
+    bytes: &[u8],
+    mut i: usize,
+) -> Option<(String, usize)>
+{
+    if i >= bytes.len()
+    {
+        return None;
+    }
+    let first = bytes[i];
+    if !((first == b'_') || (first as char).is_ascii_alphabetic())
+    {
+        return None;
+    }
+    let start = i;
+    i += 1;
+    while i < bytes.len()
+    {
+        let c = bytes[i] as char;
+        if c.is_ascii_alphanumeric() || bytes[i] == b'_'
+        {
+            i += 1;
+        }
+        else
+        {
+            break;
+        }
+    }
+    let name = String::from_utf8_lossy(&bytes[start..i]).into_owned();
+    Some((name, i))
+}
+
+/// Collect neighbor function names up to a small depth using quick scans.
+pub fn collect_callgraph_names(
+    root: &Path,
+    anchor_path: &Path,
+    anchor_line: usize,
+    anchor_fn: &str,
+    depth: u8,
+) -> Vec<String>
+{
+    let mut out = BTreeSet::new();
+    let mut frontier: VecDeque<(String, PathBuf, usize, u8)> = VecDeque::new();
+    frontier.push_back((
+        anchor_fn.to_string(),
+        anchor_path.to_path_buf(),
+        anchor_line,
+        0,
+    ));
+    while let Some((_name, path, line, d)) = frontier.pop_front()
+    {
+        if d >= depth
+        {
+            continue;
+        }
+        if let Some(calls) = scan_calls_near(root, &path, line, 120)
+        {
+            for c in calls
+            {
+                if out.insert(c.clone())
+                {
+                    frontier.push_back((c, path.clone(), line, d + 1));
+                }
+            }
+        }
+    }
+    out.into_iter()
+        .collect()
+}
+
+fn scan_calls_near(
+    root: &Path,
+    path: &Path,
+    line: usize,
+    window: usize,
+) -> Option<Vec<String>>
+{
+    let text = fs::read_to_string(root.join(path)).ok()?;
+    let lines: Vec<&str> = text
+        .lines()
+        .collect();
+
+    if lines.is_empty()
+    {
+        return Some(Vec::new());
+    }
+
+    let idx = line
+        .saturating_sub(1)
+        .min(
+            lines
+                .len()
+                .saturating_sub(1),
+        );
+    let lo = idx.saturating_sub(window);
+    let hi = (idx + window).min(
+        lines
+            .len()
+            .saturating_sub(1),
+    );
+
+    let mut out = BTreeSet::new();
+
+    for line in &lines[lo..=hi]
+    {
+        let mut j = 0usize;
+        let b = line.as_bytes();
+
+        while j < b.len()
+        {
+            if let Some((name, k)) = take_ident(b, j)
+            {
+                let mut m = k;
+
+                while m < b.len() && is_space(Some(b[m]))
+                {
+                    m += 1;
+                }
+
+                if m < b.len()
+                    && b[m] == b'('
+                    && name != "if"
+                    && name != "for"
+                    && name != "while"
+                    && name != "match"
+                {
+                    out.insert(name);
+                }
+
+                j = k + 1;
+
+                continue;
+            }
+
+            j += 1;
+        }
+    }
+    Some(
+        out.into_iter()
+            .collect(),
+    )
 }

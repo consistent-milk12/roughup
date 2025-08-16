@@ -77,6 +77,14 @@ pub struct Cli
     pub dry_run: bool,
 }
 
+#[expect(
+    clippy::large_enum_variant,
+    reason = "The `Commands` enum carries several large argument structs (e.g., `ContextArgs`)
+which triggers `clippy::large-enum-variant`. We intentionally keep the direct
+structs here to preserve pattern-matching ergonomics across the codebase and tests.
+Boxing subcommand payloads is possible but risks API churn and clap derive quirks.
+If a future refactor splits these, this allow can be revisited."
+)]
 #[derive(Subcommand)]
 pub enum Commands
 {
@@ -557,33 +565,41 @@ pub enum ContextTemplate
 }
 
 #[derive(Clone, Debug)]
-pub enum TemplateArg {
+pub enum TemplateArg
+{
     Preset(ContextTemplate),
     Path(PathBuf),
 }
 
-impl FromStr for TemplateArg {
+impl FromStr for TemplateArg
+{
     type Err = String;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
+    fn from_str(s: &str) -> Result<Self, Self::Err>
+    {
         let lower = s.to_ascii_lowercase();
         // accept the known presets first
-        match lower.as_str() {
+        match lower.as_str()
+        {
             "refactor" => return Ok(TemplateArg::Preset(ContextTemplate::Refactor)),
             "bugfix" => return Ok(TemplateArg::Preset(ContextTemplate::Bugfix)),
             "feature" => return Ok(TemplateArg::Preset(ContextTemplate::Feature)),
             "freeform" => return Ok(TemplateArg::Preset(ContextTemplate::Freeform)),
-            _ => {}
+            _ =>
+            {}
         }
 
         // otherwise treat it as a filesystem path
         let p = PathBuf::from(s);
-        if p.exists() {
+        if p.exists()
+        {
             Ok(TemplateArg::Path(p))
-        } else {
+        }
+        else
+        {
             Err(format!(
-                "invalid value '{}' for --template: \
-                 expected one of [refactor, bugfix, feature, freeform] or an existing file path",
+                "invalid value '{}' for --template: expected one of [refactor, bugfix, feature, \
+                 freeform] or an existing file path",
                 s
             ))
         }
@@ -617,7 +633,8 @@ pub struct ContextArgs
     #[arg(long)]
     pub semantic: bool,
 
-    /// Use a preset template [refactor|bugfix|feature|freeform] or provide a path to a template file.
+    /// Use a preset template [refactor|bugfix|feature|freeform] or provide a path to a
+    /// template file.
     #[arg(long = "template", value_name = "TEMPLATE", value_parser = TemplateArg::from_str)]
     pub template: Option<TemplateArg>,
 
@@ -669,6 +686,19 @@ pub struct ContextArgs
     /// Optional path to a compiler/test log to seed fail signals
     #[arg(long = "fail-signal", value_name = "PATH")]
     pub fail_signal: Option<PathBuf>,
+
+    /// Resolve trait/impl surface for a qualified method, e.g. "MyTrait::my_method".
+    /// Adds the trait definition, related impl blocks, and the qualified method to
+    /// lookup.
+    #[arg(long = "trait-resolve", value_name = "Type::method")]
+    pub trait_resolve: Option<String>,
+
+    /// Include lightweight static callgraph neighbors.
+    /// Format: "anchor=path:line depth=N". If anchor omitted here, falls back
+    /// to --anchor/--anchor-line. Depth defaults to 1. Only shallow, fast
+    /// scanning is performed; no full language server is used.
+    #[arg(long = "callgraph", value_name = "anchor=PATH:LINE depth=N")]
+    pub callgraph: Option<String>,
 }
 
 #[derive(Parser, Debug)]
