@@ -17,12 +17,12 @@ overlap = 128
 by_symbols = true
 
 [apply]
-engine = "auto"        # Smart fallback (internal → git)
-git_mode = "3way"      # Resilient apply
-backup = true          # Always keep a backup
+engine = "auto" # Smart fallback (internal → git)
+git_mode = "3way" # Resilient apply
+backup = true # Always keep a backup
 context_lines = 3
-force = false          # Require explicit --force to override
-whitespace = "nowarn"  # LLM-friendly whitespace handling
+force = false # Require explicit --force to override
+whitespace = "nowarn" # LLM-friendly whitespace handling
 ignore_patterns = [
     "target/",
     "node_modules/",
@@ -34,25 +34,3 @@ ignore_patterns = [
     ".DS_Store",
     "Thumbs.db",
 ]
-
-[extract]
-annotate = false
-fence = false
-output_file = "extracted_source.txt"
-
-[tree]
-show_hidden = false
-
-[symbols]
-languages = [
-    "rust",
-    "python",
-    "javascript",
-]
-include_private = false
-output_file = "symbols.jsonl"
-
-[chunk]
-max_tokens = 4000
-model = "gpt-4"
-output_dir = "chunks"
