@@ -4,24 +4,14 @@ use std::path::PathBuf;
 // These unit tests exercise the parsing and query-derivation layer, which is
 // the minimal contract for Week 4. Full integration precision metrics are
 // validated by higher-level scoreboards outside this unit scope.
-
-// We call into helper functions via the module path. If your crate path differs,
-// adjust `use` lines accordingly.
-mod helpers
-{
-    pub use roughup::core::context::{
-        collect_callgraph_names as _collect_callgraph_names,
-        extract_function_name_at as _extract_function_name_at,
-        parse_trait_resolve as _parse_trait_resolve,
-    };
-}
+use roughup::{ContextAssembler, context::CallGraph};
 
 #[test]
 fn trait_resolve_finds_impl_block()
 {
     // Given
     let q = "MyTrait::my_method";
-    let (ty, method) = helpers::_parse_trait_resolve(q).expect("parse");
+    let (ty, method) = ContextAssembler::parse_trait_resolve(q).expect("parse");
     assert_eq!(ty, "MyTrait");
     assert_eq!(method, "my_method");
 
@@ -72,11 +62,11 @@ fn callgraph_finds_callers_at_depth_2()
 
     // Given: detect the function name at the anchor
     let fname =
-        helpers::_extract_function_name_at(&root, &file, anchor_line).expect("func at anchor");
+        CallGraph::extract_function_name_at(&root, &file, anchor_line).expect("func at anchor");
     assert_eq!(fname, "b");
 
     // When: collect neighbors with depth=2
-    let names = helpers::_collect_callgraph_names(&root, &file, anchor_line, &fname, 2);
+    let names = CallGraph::collect_callgraph_names(&root, &file, anchor_line, &fname, 2);
 
     // Then: we should see both the direct callee `c` and the caller `a`
     assert!(

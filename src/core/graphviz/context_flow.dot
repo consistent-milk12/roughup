@@ -1,0 +1,118 @@
+digraph ContextAssembly {
+  rankdir=LR;
+  labelloc="t";
+  label="Context Assembly (context.rs) — end-to-end flow";
+  fontsize=12;
+
+  node [fontname="Helvetica"];
+
+  subgraph cluster_inputs {
+    label="Inputs";
+    color=lightgrey;
+    style=rounded;
+    cli [label="CLI Args (ContextArgs)\n+ AppContext", shape=folder];
+    cfg [label="Config (config.toml)", shape=folder];
+    anchor [label="Anchor (file:line)\n(optional)", shape=note];
+    queries [label="Queries", shape=note];
+    fsig [label="Fail Signal File\n(optional)", shape=note];
+  }
+
+  subgraph cluster_phase1 {
+    label="Phase 1 — prepare_context";
+    color=lightgrey;
+    style=rounded;
+    p1 [label="prepare_context", shape=box];
+    idxchk [label="symbols index?\n& fresh?", shape=diamond];
+    lock [label="ensure_symbols_with_lock\n(generate/refresh)", shape=box];
+    env [label="ContextEnvironment", shape=folder];
+  }
+
+  subgraph cluster_phase2 {
+    label="Phase 2 — collect_symbols";
+    color=lightgrey;
+    style=rounded;
+    p2 [label="collect_symbols", shape=box];
+    aug [label="Augment queries:\n• trait-resolve\n• bounded callgraph", shape=box];
+    lookup [label="SymbolIndex.lookup()", shape=box];
+    dedup [label="Deduplicate (stable)", shape=box];
+    col [label="Collected", shape=folder];
+  }
+
+  subgraph cluster_phase3 {
+    label="Phase 3 — assemble_pieces";
+    color=lightgrey;
+    style=rounded;
+    p3 [label="assemble_pieces", shape=box];
+    sym2piece [label="Symbols → Pieces", shape=box];
+    merge [label="Merge overlaps", shape=box];
+    rank [label="Rank:\nanchor → same dir → path,line", shape=box];
+    calldist [label="Call-distance boost", shape=ellipse];
+    fsboost [label="Fail-signal boost", shape=ellipse];
+    budget [label="Budgeter.fit\n(+ buckets / dedupe)", shape=box];
+    render [label="Render\n(JSON or text)", shape=box];
+    asm [label="Assembled", shape=folder];
+  }
+
+  subgraph cluster_phase4 {
+    label="Phase 4 — output_results";
+    color=lightgrey;
+    style=rounded;
+    p4 [label="output_results", shape=box];
+    print [label="stdout", shape=parallelogram];
+    clip [label="clipboard (opt)", shape=parallelogram];
+    hist [label="history (MRU)", shape=parallelogram];
+    err_no_symbols [label="error JSON:\nno_symbols", shape=octagon, color=red];
+    err_no_matches [label="error JSON:\nno_matches", shape=octagon, color=red];
+  }
+
+  // External index resource
+  symidx [label="SymbolIndex (symbols.jsonl)", shape=component];
+
+  // Edges — Phase 1
+  cli -> p1; cfg -> p1; 
+  p1 -> idxchk;
+  idxchk -> symidx [label="fresh", color=green];
+  idxchk -> lock [label="missing/stale", color=red];
+  lock -> symidx;
+  p1 -> env [label="tier/budget/limits\nhistory, model"];
+  symidx -> p2;
+
+  // Phase 2 flow
+  env -> p2;
+  queries -> aug;
+  anchor -> aug;
+  p2 -> aug;
+  aug -> dedup -> lookup;
+  lookup -> col [label="RankedSymbol[]"];
+  fsig -> p2 [label="parse fail signals", style=dashed];
+  p2 -> col [label="fail_signals, anchor hints"];
+
+  // Branch to Phase 3 or errors
+  col -> p3;
+  empty_check [label="chosen.is_empty()?", shape=diamond];
+  col -> empty_check;
+  empty_check -> p3 [label="no", color=green];
+  empty_check -> p4 [label="yes", color=orange];
+
+  // Phase 3 flow
+  p3 -> sym2piece -> merge -> rank;
+  rank -> calldist -> budget;
+  rank -> fsboost -> budget;
+  budget -> render -> asm;
+
+  // Phase 4 flow
+  asm -> p4;
+  sym_exists [label="symbols exists?\n(index present)", shape=diamond];
+  p4 -> sym_exists;
+  sym_exists -> print [label="yes", color=green];
+  sym_exists -> err_no_symbols [label="no", color=red];
+  p4 -> err_no_matches [label="no matches", color=orange, style=dashed];
+  p4 -> clip [style=dashed];
+  p4 -> hist [style=dashed];
+
+  {rank=same; cli cfg queries anchor fsig}
+  {rank=same; p1 idxchk symidx}
+  {rank=same; p2 aug dedup lookup col}
+  {rank=same; p3 sym2piece merge rank calldist fsboost budget render asm}
+  {rank=same; p4 print clip hist err_no_symbols err_no_matches}
+}

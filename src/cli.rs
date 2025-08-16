@@ -188,7 +188,7 @@ pub struct TreeArgs
     pub depth: Option<usize>,
 }
 
-#[derive(Debug, Parser)]
+#[derive(Debug, Clone, Parser)]
 pub struct SymbolsArgs
 {
     /// Root directory to scan

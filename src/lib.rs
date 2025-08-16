@@ -75,10 +75,9 @@ pub mod core
 
     /// Fail-signal seeding for compiler/test log parsing (Phase 3.5 - Week 3)
     pub mod fail_signal;
-    pub use context::{
-        collect_callgraph_names, extract_function_name_at, parse_callgraph_arg, parse_path_line,
-        parse_trait_resolve, run as context_run,
-    };
+    // Context assembly and call graph utilities
+    pub use context::{CallGraph, CallGraphHopper, ContextAssembler};
+    // Fail-signal parsing for compiler/test logs
     pub use fail_signal::{FailSignal, FailSignalParser, Severity, parse_fail_signals};
 }
 
@@ -125,7 +124,7 @@ pub mod infra
 // Phase 3 re-exports
 // Core types for external consumers
 pub use core::{
-    chunk_run, context, context_run, extract_run, generate_patches, render_unified_diff,
+    ContextAssembler, chunk_run, context, extract_run, generate_patches, render_unified_diff,
     symbols::{ExtractOptions, Symbol, SymbolKind, Visibility},
     symbols_run, tree_run,
 };

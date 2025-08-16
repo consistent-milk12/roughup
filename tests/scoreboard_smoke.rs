@@ -20,10 +20,12 @@ fn scoreboard_runs_and_emits_metrics()
     let tmp = make_heavy_fixture();
 
     // Ensure symbols exist to avoid warm-start variance
+    // Use unique symbols file name to prevent race conditions between parallel tests
+    let symbols_path = tmp.path().join("symbols.jsonl");
     Command::cargo_bin("rup")
         .expect("bin")
         .current_dir(tmp.path())
-        .arg("symbols")
+        .args(["symbols", "--output", symbols_path.to_str().unwrap()])
         .assert()
         .success();
 
@@ -58,9 +60,10 @@ fn scoreboard_runs_and_emits_metrics()
         .path()
         .join("scoreboard.jsonl");
 
-    // Run the scoreboard binary
+    // Run the scoreboard binary in the test fixture directory
     Command::cargo_bin("scoreboard")
         .expect("bin")
+        .current_dir(tmp.path())
         .args([
             "--plan",
             plan_path
@@ -137,10 +140,12 @@ fn scoreboard_handles_probe_first_scenario()
     let tmp = make_heavy_fixture();
 
     // Ensure symbols exist
+    // Use unique symbols file name to prevent race conditions between parallel tests
+    let symbols_path = tmp.path().join("symbols.jsonl");
     Command::cargo_bin("rup")
         .expect("bin")
         .current_dir(tmp.path())
-        .arg("symbols")
+        .args(["symbols", "--output", symbols_path.to_str().unwrap()])
         .assert()
         .success();
 
@@ -174,9 +179,10 @@ fn scoreboard_handles_probe_first_scenario()
         .path()
         .join("scoreboard.jsonl");
 
-    // Run the scoreboard binary
+    // Run the scoreboard binary in the test fixture directory
     Command::cargo_bin("scoreboard")
         .expect("bin")
+        .current_dir(tmp.path())
         .args([
             "--plan",
             plan_path
@@ -210,10 +216,12 @@ fn scoreboard_explicit_budget_scenario()
     let tmp = make_heavy_fixture();
 
     // Ensure symbols exist
+    // Use unique symbols file name to prevent race conditions between parallel tests
+    let symbols_path = tmp.path().join("symbols.jsonl");
     Command::cargo_bin("rup")
         .expect("bin")
         .current_dir(tmp.path())
-        .arg("symbols")
+        .args(["symbols", "--output", symbols_path.to_str().unwrap()])
         .assert()
         .success();
 
@@ -247,9 +255,10 @@ fn scoreboard_explicit_budget_scenario()
         .path()
         .join("scoreboard.jsonl");
 
-    // Run the scoreboard binary
+    // Run the scoreboard binary in the test fixture directory
     Command::cargo_bin("scoreboard")
         .expect("bin")
+        .current_dir(tmp.path())
         .args([
             "--plan",
             plan_path
