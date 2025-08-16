@@ -441,13 +441,13 @@ mod tests
         let tmp = TempDir::new()?;
         let root = tmp.path();
 
-        // depth 0: just root files
+        // depth 1: just root files (depth 0 would traverse nothing)
         std::fs::write(root.join("a.txt"), "a")?;
         std::fs::create_dir_all(root.join("sub"))?;
         std::fs::write(root.join("sub/b.txt"), "b")?;
 
-        // Without following symlinks and max depth 0, only a.txt
-        let walker = FileWalker::new(&[])?.with_max_depth(Some(0));
+        // Without following symlinks and max depth 1, only a.txt (depth 0 means traverse nothing)
+        let walker = FileWalker::new(&[])?.with_max_depth(Some(1));
         let mut files = walker.walk_files(root);
         files
             .iter_mut()

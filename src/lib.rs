@@ -72,6 +72,11 @@ pub mod core
     pub mod context;
     /// Smart context assembly (Phase 3)
     pub mod symbol_index;
+    
+    /// Fail-signal seeding for compiler/test log parsing (Phase 3.5 - Week 3)
+    pub mod fail_signal;
+    pub use fail_signal::{FailSignal, FailSignalParser, Severity, parse_fail_signals};
+    
     pub use context::run as context_run;
 }
 

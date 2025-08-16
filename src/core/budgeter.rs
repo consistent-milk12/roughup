@@ -374,6 +374,126 @@ impl Budgeter
             }
         }
 
+        // 2.5) Hard item reconciliation: ensure ALL hard items are present
+        use std::collections::HashMap;
+        let meta_hard: HashMap<&str, usize> = hard_first
+            .iter()
+            .map(|h| {
+                (
+                    h.id.as_str(),
+                    h.min_tokens
+                        .max(1),
+                )
+            })
+            .collect();
+
+        // OWN the ids so we don't borrow from `out`
+        let mut present: HashSet<String> = out
+            .iter()
+            .map(|fi| {
+                fi.id
+                    .clone()
+            })
+            .collect();
+
+        for h in &hard_first
+        {
+            // already present?
+            if present.contains(&h.id)
+            {
+                continue;
+            }
+
+            let need = meta_hard[&h
+                .id
+                .as_str()];
+
+            // free space: drop non-hard tails first (update `present`)
+            while remaining < need
+            {
+                if let Some(pos) = out
+                    .iter()
+                    .rposition(|fi| {
+                        !meta_hard.contains_key(
+                            fi.id
+                                .as_str(),
+                        )
+                    })
+                {
+                    remaining = remaining.saturating_add(out[pos].tokens);
+                    let removed_id = out[pos]
+                        .id
+                        .clone();
+                    out.remove(pos);
+                    present.remove(&removed_id);
+                }
+                else
+                {
+                    break;
+                }
+            }
+
+            // still not enough? trim existing hard items down to their mins
+            if remaining < need
+            {
+                for j in (0..out.len()).rev()
+                {
+                    let id = out[j]
+                        .id
+                        .as_str();
+                    if let Some(min_need) = meta_hard.get(id)
+                        && out[j].tokens > *min_need
+                    {
+                        let want = *min_need;
+                        let (new_text, new_tok) = self.take_prefix(&out[j].full_content, want);
+                        remaining = remaining.saturating_add(out[j].tokens - new_tok);
+                        out[j].content = new_text;
+                        out[j].tokens = new_tok;
+                    }
+
+                    if remaining >= need
+                    {
+                        break;
+                    }
+                }
+            }
+
+            // last resort: drop another NON-HARD tail if any (never drop hard)
+            if remaining < need
+                && let Some(pos) = out
+                    .iter()
+                    .rposition(|fi| {
+                        !meta_hard.contains_key(
+                            fi.id
+                                .as_str(),
+                        )
+                    })
+            {
+                let last = out.remove(pos);
+                remaining = remaining.saturating_add(last.tokens);
+                present.remove(&last.id);
+            }
+
+            // place the missing hard if we have room
+            if remaining >= need
+            {
+                let (s, t) = self.take_prefix(&h.content, need);
+                out.push(FittedItem {
+                    id: h
+                        .id
+                        .clone(),
+                    full_content: h
+                        .content
+                        .clone(),
+                    content: s,
+                    tokens: t,
+                });
+                present.insert(h.id.clone());
+                remaining = remaining.saturating_sub(t);
+            }
+        }
+        // end reconciliation
+
         // 3) If we couldn't place minimal hard pieces earlier, attempt to trim existing hard
         //    items
         if remaining == 0
@@ -534,42 +654,44 @@ impl Budgeter
             return (String::new(), 0);
         }
 
+        // tokenize once
         let ids = self
             .bpe
             .encode_ordinary(s);
 
+        // fits without trim
         if ids.len() <= max_tokens
         {
             return (s.to_string(), ids.len());
         }
 
-        let reserve_for_ellipsis = 1usize;
-        let cap = max_tokens.saturating_sub(reserve_for_ellipsis);
-
-        if cap == 0
-        {
-            return (String::from("…\n"), 1);
-        }
-
-        let prefix = &ids[..cap];
-        let text = self
+        // sentinel ensures a hard boundary; newline guards against BPE merges
+        let ellipsis_ids = self
             .bpe
-            .decode(prefix.to_vec())
-            .unwrap_or_default();
+            .encode_ordinary("\n…\n");
+        let e = ellipsis_ids.len();
 
-        let mut out = text
-            .trim_end()
-            .to_string();
-
-        if !out.ends_with('\n')
+        if max_tokens <= e
         {
-            out.push('\n');
+            // we can't afford any prefix; show as much of the sentinel as fits
+            let take = &ellipsis_ids[..max_tokens];
+            let out = self
+                .bpe
+                .decode(take.to_vec())
+                .unwrap_or_default();
+            return (out, max_tokens);
         }
 
-        out.push_str("…\n");
+        let cap = max_tokens - e;
+        let mut combined = Vec::with_capacity(cap + e);
+        combined.extend_from_slice(&ids[..cap]);
+        combined.extend_from_slice(&ellipsis_ids);
 
-        // Return exactly max_tokens as the emitted token count.
-        (out, max_tokens)
+        let out = self
+            .bpe
+            .decode(combined.clone())
+            .unwrap_or_default();
+        (out, cap + e)
     }
 }
 
@@ -876,32 +998,47 @@ fn sort_items_stable(mut items: Vec<Item>) -> Vec<Item>
     items
 }
 
-// MSRV-safe ordering helper to avoid .is_ge() issues
-fn ge(ord: std::cmp::Ordering) -> bool
-{
-    matches!(ord, std::cmp::Ordering::Greater | std::cmp::Ordering::Equal)
-}
-
 // Chooses which of two near-duplicates to keep deterministically.
-// Prefers higher Priority, then fewer tokens, then lower id.
+// Order: higher priority → (meaningfully) fewer tokens → lower id.
+// If token counts differ by less than a small tolerance, treat as equal
+// to avoid flipping winners on whitespace-only edits; fall back to id asc.
 fn keep_left_if_better(
     a: &Item,
     b: &Item,
     budgeter: &Budgeter,
 ) -> bool
 {
-    // Compare priority first (desc), then token count (asc),
-    // then id (asc) for a total order.
-    ge(a.priority
+    // 1) priority first (desc)
+    match a
+        .priority
         .cmp(&b.priority)
-        .then_with(|| {
-            budgeter
-                .count(&b.content)
-                .cmp(&budgeter.count(&a.content))
-        })
-        .then_with(|| {
-            a.id.cmp(&b.id)
-        }))
+    {
+        std::cmp::Ordering::Greater => return true,
+        std::cmp::Ordering::Less => return false,
+        std::cmp::Ordering::Equal =>
+        {}
+    }
+
+    // 2) token counts with tolerance
+    let a_tok = budgeter.count(&a.content);
+    let b_tok = budgeter.count(&b.content);
+
+    // small diffs are noise; adjust as needed
+    const TOKEN_DELTA_MIN: usize = 4;
+
+    if a_tok + TOKEN_DELTA_MIN <= b_tok
+    {
+        // a is meaningfully smaller
+        return true;
+    }
+    if b_tok + TOKEN_DELTA_MIN <= a_tok
+    {
+        // b is meaningfully smaller
+        return false;
+    }
+
+    // 3) stable tie-break: lower id wins (matches pre-sort by id asc)
+    a.id < b.id
 }
 
 // Generates winnowed fingerprints using a sliding window over hashed
@@ -912,8 +1049,8 @@ fn fingerprints(
     window: usize,
 ) -> Vec<u64>
 {
-    // Early return if window is too small.
-    if window == 0 || tokens.is_empty()
+    // Early return if window is too small or larger than tokens.
+    if window == 0 || tokens.is_empty() || window > tokens.len()
     {
         return Vec::new();
     }
@@ -1008,6 +1145,45 @@ fn normalize_for_ngrams(s: &str) -> String
         .join(" ")
 }
 
+// Route hashed shingle extraction by mode
+fn hashed_shingles_mode(
+    text: &str,
+    n: usize,
+    mode: NgramMode,
+) -> Vec<u64>
+{
+    match mode
+    {
+        NgramMode::Word => hashed_shingles(text, n),
+        NgramMode::Char => hashed_char_ngrams(text, n),
+    }
+}
+
+// Build u64 hashes for character n-grams over normalized text
+// Uses bytes for performance; adequate for source code domains
+fn hashed_char_ngrams(
+    text: &str,
+    n: usize,
+) -> Vec<u64>
+{
+    // Normalize first to collapse whitespace/comments similarly to
+    // the word path, keeping determinism
+    let norm = normalize_for_ngrams(text);
+    let bytes = norm.as_bytes();
+    if bytes.len() < n
+    {
+        return Vec::new();
+    }
+    let mut out = Vec::with_capacity(bytes.len() - n + 1);
+    for win in bytes.windows(n)
+    {
+        let mut h = Xxh64::new(0);
+        h.update(win);
+        out.push(h.digest());
+    }
+    out
+}
+
 // Computes SimHash for a text via hashed shingles. Suitable for quick
 // Hamming-distance screening on large spans.
 fn simhash_64(
@@ -1063,6 +1239,16 @@ fn simhash_close(
 // AST-aware shingles with SimHash fallback for duplicate content detection
 // Implements Jaccard 4-gram similarity with rolling hash prefilter
 
+/// N-gram granularity selector for similarity calculation
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NgramMode
+{
+    /// Word n-grams (stable across punctuation changes)
+    Word,
+    /// Character n-grams (more sensitive; boosts DCR on templates)
+    Char,
+}
+
 /// Configuration for deduplication engine
 #[derive(Debug, Clone)]
 pub struct DedupeConfig
@@ -1078,6 +1264,12 @@ pub struct DedupeConfig
 
     /// Rolling hash window size for prefiltering
     pub hash_window: usize,
+
+    /// N-gram granularity mode (default: Word for backward compatibility)
+    pub ngram_mode: NgramMode,
+
+    /// Whether to enable char n-gram fallback when primary mode is Word
+    pub char_fallback: bool,
 }
 
 impl Default for DedupeConfig
@@ -1089,7 +1281,44 @@ impl Default for DedupeConfig
             ngram_size: 4,
             preserve_interfaces: true,
             hash_window: 64,
+            ngram_mode: NgramMode::Word, // Default to word for backward compatibility
+            char_fallback: true,         // default on for production DCR
         }
+    }
+}
+
+// Helper: Jaccard similarity over u64 shingles
+fn jaccard_u64(
+    a: &[u64],
+    b: &[u64],
+) -> f64
+{
+    use std::collections::HashSet;
+    if a.is_empty() && b.is_empty()
+    {
+        return 1.0;
+    }
+    let aa: HashSet<u64> = a
+        .iter()
+        .copied()
+        .collect();
+    let bb: HashSet<u64> = b
+        .iter()
+        .copied()
+        .collect();
+    let inter = aa
+        .intersection(&bb)
+        .count();
+    let union = aa
+        .union(&bb)
+        .count();
+    if union == 0
+    {
+        0.0
+    }
+    else
+    {
+        inter as f64 / union as f64
     }
 }
 
@@ -1212,7 +1441,7 @@ impl DedupeEngine
             }
             else
             {
-                !self.is_duplicate_with_better_selection(&item, &mut kept_items, budgeter)
+                !self.is_duplicate_with_better_selection(&item, &mut kept_items[..], budgeter)
             };
 
             if should_keep
@@ -1249,156 +1478,39 @@ impl DedupeEngine
         kept_items: &[Item],
     ) -> bool
     {
-        let item_shingles = self.extract_shingles(&item.content);
-
         for kept in kept_items
         {
-            let kept_shingles = self.extract_shingles(&kept.content);
-            let jaccard = self.jaccard_similarity(&item_shingles, &kept_shingles);
-
-            if jaccard
-                >= self
-                    .config
-                    .jaccard_threshold
+            if self.near_duplicate_hashed(&item.content, &kept.content)
             {
-                return true; // Found duplicate
+                return true;
             }
         }
-
         false
     }
 
     /// Check if item is duplicate with priority-aware selection
-    fn is_duplicate_with_better_selection(
+    pub fn is_duplicate_with_better_selection(
         &self,
         item: &Item,
         kept_items: &mut [Item],
         budgeter: &Budgeter,
     ) -> bool
     {
-        let ih = self.extract_hashed_shingles(&item.content);
-
-        // Optional SimHash short-circuit for long spans
-        let i_sim = if ih.len() > 2000
+        for kept in kept_items.iter_mut()
         {
-            Some(simhash_64(64, &ih))
-        }
-        else
-        {
-            None
-        };
-
-        for kept_item in kept_items.iter_mut()
-        {
-            let kh = self.extract_hashed_shingles(&kept_item.content);
-
-            // Quick fingerprint gate
-            if !self.should_compare_detailed(&ih, &kh)
+            if self.near_duplicate_hashed(&item.content, &kept.content)
             {
-                continue;
-            }
-
-            // Optional SimHash gate
-            if let (Some(a), Some(b)) = (
-                i_sim,
-                if kh.len() > 2000
+                // Deterministic tie-break
+                if keep_left_if_better(item, kept, budgeter)
                 {
-                    Some(simhash_64(64, &kh))
-                }
-                else
-                {
-                    None
-                },
-            ) && simhash_close(a, b, 4)
-            {
-                if keep_left_if_better(item, kept_item, budgeter)
-                {
-                    *kept_item = item.clone();
+                    *kept = item.clone();
                 }
 
-                return true;
-            }
-
-            // Final precise Jaccard over u64 sets
-            let is_dup = {
-                let a: HashSet<u64> = ih
-                    .iter()
-                    .copied()
-                    .collect();
-                let b: HashSet<u64> = kh
-                    .iter()
-                    .copied()
-                    .collect();
-                let inter = a
-                    .intersection(&b)
-                    .count();
-                let union = a
-                    .union(&b)
-                    .count();
-                union > 0
-                    && (inter as f64 / union as f64)
-                        >= self
-                            .config
-                            .jaccard_threshold
-            };
-
-            if is_dup
-            {
-                if keep_left_if_better(item, kept_item, budgeter)
-                {
-                    *kept_item = item.clone();
-                }
                 return true;
             }
         }
 
         false
-    }
-
-    /// Extract hashed n-gram shingles from content (performance optimized)
-    fn extract_shingles(
-        &self,
-        content: &str,
-    ) -> HashSet<String>
-    {
-        // Legacy string-based implementation for compatibility
-        let normalized = self.normalize_content(content);
-        let words: Vec<&str> = normalized
-            .split_whitespace()
-            .collect();
-
-        if words.len()
-            < self
-                .config
-                .ngram_size
-        {
-            return HashSet::new();
-        }
-
-        let mut shingles = HashSet::new();
-        for window in words.windows(
-            self.config
-                .ngram_size,
-        )
-        {
-            let shingle = window.join(" ");
-            shingles.insert(shingle);
-        }
-
-        shingles
-    }
-
-    /// Extract hashed n-gram shingles (performance optimized)
-    fn extract_hashed_shingles(
-        &self,
-        content: &str,
-    ) -> Vec<u64>
-    {
-        hashed_shingles(
-            content,
-            self.config
-                .ngram_size,
-        )
     }
 
     /// Fast prefilter using windowed fingerprints
@@ -1408,36 +1520,38 @@ impl DedupeEngine
         kept_hashes: &[u64],
     ) -> bool
     {
-        if self
+        let w = self
             .config
-            .hash_window
-            == 0
+            .hash_window;
+
+        // If windowing is disabled or inputs are too small, don't block —
+        // allow detailed comparison
+        if w == 0
             || item_hashes.is_empty()
             || kept_hashes.is_empty()
+            || w > item_hashes.len()
+            || w > kept_hashes.len()
         {
-            return true; // Fallback to detailed comparison
+            return true;
         }
 
-        let item_fingerprints = fingerprints(
-            item_hashes,
-            self.config
-                .hash_window,
-        );
-        let kept_fingerprints = fingerprints(
-            kept_hashes,
-            self.config
-                .hash_window,
-        );
+        let item_fp = fingerprints(item_hashes, w);
+        let kept_fp = fingerprints(kept_hashes, w);
 
-        // If fingerprint sets are very different, skip detailed comparison
-        let item_set: HashSet<u64> = item_fingerprints
+        // No signal? Fall back to detailed comparison
+        if item_fp.is_empty() || kept_fp.is_empty()
+        {
+            return true;
+        }
+
+        let item_set: std::collections::HashSet<u64> = item_fp
             .into_iter()
             .collect();
-        let kept_set: HashSet<u64> = kept_fingerprints
+        let kept_set: std::collections::HashSet<u64> = kept_fp
             .into_iter()
             .collect();
 
-        let intersection = item_set
+        let inter = item_set
             .intersection(&kept_set)
             .count();
         let union = item_set
@@ -1446,16 +1560,94 @@ impl DedupeEngine
 
         if union == 0
         {
-            return false;
+            return true; // still no signal → allow detailed
         }
 
-        let quick_jaccard = intersection as f64 / union as f64;
-        // Only do detailed comparison if quick check suggests similarity
-        quick_jaccard
+        let quick_j = inter as f64 / union as f64;
+        quick_j
             >= (self
                 .config
                 .jaccard_threshold
                 * 0.5)
+    }
+
+    /// Try primary mode (word or char), then char fallback with a slightly
+    /// lower threshold to handle identifier/punctuation edits
+    fn near_duplicate_hashed(
+        &self,
+        a: &str,
+        b: &str,
+    ) -> bool
+    {
+        let n = self
+            .config
+            .ngram_size;
+
+        // Primary mode
+        let ah = hashed_shingles_mode(
+            a,
+            n,
+            self.config
+                .ngram_mode,
+        );
+        let bh = hashed_shingles_mode(
+            b,
+            n,
+            self.config
+                .ngram_mode,
+        );
+
+        if self.should_compare_detailed(&ah, &bh)
+        {
+            let j = jaccard_u64(&ah, &bh);
+            if j >= self
+                .config
+                .jaccard_threshold
+            {
+                return true;
+            }
+        }
+
+        // char fallback ONLY if enabled and primary mode is Word
+        if self
+            .config
+            .char_fallback
+            && self
+                .config
+                .ngram_mode
+                == NgramMode::Word
+        {
+            let ac = hashed_char_ngrams(a, n);
+            let bc = hashed_char_ngrams(b, n);
+
+            if self.should_compare_detailed(&ac, &bc)
+            {
+                // Slightly more permissive than primary threshold
+                let fallback = (self
+                    .config
+                    .jaccard_threshold
+                    * 0.9)
+                    .min(0.55);
+                let j = jaccard_u64(&ac, &bc);
+                if j >= fallback
+                {
+                    return true;
+                }
+            }
+        }
+
+        // Optional: SimHash for long spans (kept cheap)
+        if ah.len() > 2000 && bh.len() > 2000
+        {
+            let sa = simhash_64(64, &ah);
+            let sb = simhash_64(64, &bh);
+            if simhash_close(sa, sb, 4)
+            {
+                return true;
+            }
+        }
+
+        false
     }
 
     /// Normalize content for comparison (remove comments, whitespace variations)
@@ -1483,35 +1675,6 @@ impl DedupeEngine
             .filter(|line| !line.is_empty())
             .collect::<Vec<_>>()
             .join(" ")
-    }
-
-    /// Calculate Jaccard similarity between two shingle sets
-    fn jaccard_similarity(
-        &self,
-        set1: &HashSet<String>,
-        set2: &HashSet<String>,
-    ) -> f64
-    {
-        if set1.is_empty() && set2.is_empty()
-        {
-            return 1.0;
-        }
-
-        let intersection = set1
-            .intersection(set2)
-            .count();
-        let union = set1
-            .union(set2)
-            .count();
-
-        if union == 0
-        {
-            0.0
-        }
-        else
-        {
-            intersection as f64 / union as f64
-        }
     }
 
     /// Compute rolling hash for exact duplicate detection
@@ -1661,7 +1824,8 @@ pub fn fit_with_buckets(
         refusals.extend(test_refusals);
     }
 
-    // 3) Call `fit` separately with each cap
+    // 3) Call `fit` separately with each cap and track refusals
+    let code_items_orig = code_items.clone();
     let code_fit = budgeter.fit(
         code_items
             .into_iter()
@@ -1670,6 +1834,7 @@ pub fn fit_with_buckets(
         caps.code,
     )?;
 
+    let interface_items_orig = interface_items.clone();
     let interface_fit = budgeter.fit(
         interface_items
             .into_iter()
@@ -1678,6 +1843,7 @@ pub fn fit_with_buckets(
         caps.interfaces,
     )?;
 
+    let test_items_orig = test_items.clone();
     let test_fit = budgeter.fit(
         test_items
             .into_iter()
@@ -1686,13 +1852,137 @@ pub fn fit_with_buckets(
         caps.tests,
     )?;
 
-    // 4) Merge results preserving tier order; collect refusals
-    let mut all_items = Vec::new();
-    all_items.extend(code_fit.items);
-    all_items.extend(interface_fit.items);
-    all_items.extend(test_fit.items);
+    // Track items that didn't make it into each bucket
+    let fitted_code_ids: std::collections::HashSet<_> = code_fit
+        .items
+        .iter()
+        .map(|item| &item.id)
+        .collect();
+    for item in &code_items_orig
+    {
+        if !fitted_code_ids.contains(&item.id)
+        {
+            refusals.push(Refusal {
+                id: item
+                    .id
+                    .clone(),
+                reason: "bucket-cap-exceeded".to_string(),
+                bucket: "code".to_string(),
+            });
+        }
+    }
 
-    let total_tokens = code_fit.total_tokens + interface_fit.total_tokens + test_fit.total_tokens;
+    let fitted_interface_ids: std::collections::HashSet<_> = interface_fit
+        .items
+        .iter()
+        .map(|item| &item.id)
+        .collect();
+    for item in &interface_items_orig
+    {
+        if !fitted_interface_ids.contains(&item.id)
+        {
+            refusals.push(Refusal {
+                id: item
+                    .id
+                    .clone(),
+                reason: "bucket-cap-exceeded".to_string(),
+                bucket: "interfaces".to_string(),
+            });
+        }
+    }
+
+    let fitted_test_ids: std::collections::HashSet<_> = test_fit
+        .items
+        .iter()
+        .map(|item| &item.id)
+        .collect();
+    for item in &test_items_orig
+    {
+        if !fitted_test_ids.contains(&item.id)
+        {
+            refusals.push(Refusal {
+                id: item
+                    .id
+                    .clone(),
+                reason: "bucket-cap-exceeded".to_string(),
+                bucket: "tests".to_string(),
+            });
+        }
+    }
+
+    // 4) Apply bucket-local trimming before merge
+    let mut code_items = code_fit.items;
+    let mut interface_items = interface_fit.items;
+    let mut test_items = test_fit.items;
+
+    // Helper that trims the tail of a bucket deterministically
+    fn trim_bucket_tail(
+        items: &mut Vec<FittedItem>,
+        target: usize,
+    )
+    {
+        // Stable policy: Sort by tokens desc then id desc,
+        // so pops remove least valuable first
+        items.sort_by(|a, b| {
+            b.tokens
+                .cmp(&a.tokens)
+                .then(b.id.cmp(&a.id))
+        });
+        // Remove until within target
+        let mut total = items
+            .iter()
+            .map(|x| x.tokens)
+            .sum::<usize>();
+        while total > target
+        {
+            if let Some(last) = items.pop()
+            {
+                total = total.saturating_sub(last.tokens);
+            }
+            else
+            {
+                break;
+            }
+        }
+    }
+
+    // Enforce per-bucket caps strictly before merge
+    let code_total = code_items
+        .iter()
+        .map(|x| x.tokens)
+        .sum::<usize>();
+    let interface_total = interface_items
+        .iter()
+        .map(|x| x.tokens)
+        .sum::<usize>();
+    let test_total = test_items
+        .iter()
+        .map(|x| x.tokens)
+        .sum::<usize>();
+
+    if code_total > caps.code
+    {
+        trim_bucket_tail(&mut code_items, caps.code);
+    }
+    if interface_total > caps.interfaces
+    {
+        trim_bucket_tail(&mut interface_items, caps.interfaces);
+    }
+    if test_total > caps.tests
+    {
+        trim_bucket_tail(&mut test_items, caps.tests);
+    }
+
+    // Merge after bucket-local trims
+    let mut all_items = Vec::new();
+    all_items.extend(code_items);
+    all_items.extend(interface_items);
+    all_items.extend(test_items);
+
+    let total_tokens = all_items
+        .iter()
+        .map(|item| item.tokens)
+        .sum::<usize>();
     let expected_total = caps.code + caps.interfaces + caps.tests;
 
     // 5) Validate ±5% compliance
@@ -1885,25 +2175,67 @@ impl TfidfIndex
     }
 }
 
-/// Tokenize text using repository-style conventions
+// Common code-ish tokens that shouldn't contribute to novelty.
+// Keep this tiny and language-agnostic; expand only if needed.
+const CODE_STOPWORDS: &[&str] = &[
+    "fn",
+    "function",
+    "struct",
+    "impl",
+    "implementation",
+    "module",
+    "class",
+    "pub",
+    "public",
+    "trait",
+    "interface",
+    "method",
+    "test",
+    "assert",
+    "std",
+    "fmt",
+    "debug",
+    "display",
+    "derive",
+    "clone",
+    "copy",
+    "eq",
+];
+
+/// Tokenize text using repository-style conventions:
+/// - split on any non-alphanumeric (except '_')
+/// - lowercase
+/// - drop very short tokens
+/// - drop common boilerplate "stopwords"
 fn tokenize_repo_style(text: &str) -> Vec<String>
 {
-    text.split_whitespace()
-        .filter_map(|word| {
-            // Clean up punctuation and extract meaningful tokens
-            let cleaned = word
-                .trim_matches(|c: char| !c.is_alphanumeric() && c != '_')
-                .to_lowercase();
-            if cleaned.len() >= 2
+    let mut toks: Vec<String> = Vec::new();
+    let mut cur = String::new();
+
+    for ch in text.chars()
+    {
+        if ch.is_alphanumeric() || ch == '_'
+        {
+            cur.push(ch.to_ascii_lowercase());
+        }
+        else if !cur.is_empty()
+        {
+            if cur.len() >= 2 && !CODE_STOPWORDS.contains(&cur.as_str())
             {
-                Some(cleaned)
+                toks.push(std::mem::take(&mut cur));
             }
             else
             {
-                None
+                cur.clear();
             }
-        })
-        .collect()
+        }
+    }
+    if !cur.is_empty() && cur.len() >= 2 && !CODE_STOPWORDS.contains(&cur.as_str())
+    {
+        toks.push(cur);
+    }
+
+    toks
 }
 
 /// Computes a crude novelty score in [0,1] from TF-IDF features.

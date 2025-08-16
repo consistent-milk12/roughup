@@ -46,6 +46,7 @@ use crate::{
         AppContext,
         ContextArgs, // CLI types
         ContextTemplate,
+        TemplateArg,
         TierArg, // tier presets
     },
     infra::config,
@@ -215,10 +216,8 @@ pub fn run(
         args.limit
     };
 
-    // Capture template selection for header rendering
-    let template = args
-        .template
-        .clone();
+    // Template for context factors (if needed in the future)
+    let _template_for_factors = extract_context_template(&args.template);
 
     // Load query history if present (best-effort; no failure)
     let history = load_history(root.join(".roughup_context_history"));
@@ -303,6 +302,24 @@ pub fn run(
 
     // Materialize a SymbolIndex view over symbols.jsonl
     let index = SymbolIndex::load(&symbols_path)?;
+
+    // 1) Collect fail signals if provided; fail closed = ignore on error
+    let mut fail_signals: Vec<crate::core::fail_signal::FailSignal> = Vec::new();
+    if let Some(path) = args.fail_signal.as_ref() {
+        match fs::read_to_string(path) {
+            Ok(text) => {
+                // Auto-detect format via available parsers; fall back to rustc
+                // We avoid unwrap/panic: empty on detection failure.
+                let parsed = autodetect_and_parse(&text);
+                if !parsed.is_empty() {
+                    fail_signals = parsed;
+                }
+            }
+            Err(_e) => {
+                // Graceful degrade: no-op when unreadable
+            }
+        }
+    }
 
     // Convert history list into a set for O(1) checks
     let hist_set = history
@@ -495,7 +512,7 @@ pub fn run(
     }
 
     // Synthesize a template header as a hard, high-priority item
-    let header = render_template(template, &args.queries);
+    let header = resolve_template_text(&args.template, &args.queries)?;
     let mut all_items = vec![Item {
         id: "__template__".into(),
         content: header,
@@ -504,6 +521,11 @@ pub fn run(
         min_tokens: 80,
     }];
     all_items.extend(items);
+
+    // 3) Apply fail-signal boost (deterministic)
+    if !fail_signals.is_empty() {
+        fail_signal_boost(&mut all_items, &fail_signals, &root);
+    }
 
     // Fit items into the token budget using the selected model with optional features
     let budgeter = Budgeter::new(&model)?;
@@ -900,6 +922,43 @@ fn render_template(
     }
 }
 
+/// Resolve template text from either preset or file path
+fn resolve_template_text(arg: &Option<TemplateArg>, queries: &[String]) -> Result<String> {
+    match arg {
+        Some(TemplateArg::Preset(p)) => {
+            // Use existing preset renderer
+            Ok(render_template(*p, queries))
+        }
+        Some(TemplateArg::Path(p)) => {
+            let raw = fs::read_to_string(p)
+                .with_context(|| format!("failed to read template file {}", p.display()))?;
+            Ok(normalize_eol(&raw))
+        }
+        None => {
+            // default preset if --template omitted; keep prior behavior
+            Ok(render_template(ContextTemplate::Freeform, queries))
+        }
+    }
+}
+
+/// Simple EOL normalizer to keep manifest byte-identical across OSes
+fn normalize_eol(s: &str) -> String {
+    let mut out = s.replace("\r\n", "\n");
+    if !out.ends_with('\n') { 
+        out.push('\n'); 
+    }
+    out
+}
+
+/// Extract ContextTemplate for ranking factors
+fn extract_context_template(arg: &Option<TemplateArg>) -> Option<ContextTemplate> {
+    match arg {
+        Some(TemplateArg::Preset(p)) => Some(*p),
+        Some(TemplateArg::Path(_)) => Some(ContextTemplate::Freeform), // treat file paths as freeform
+        None => Some(ContextTemplate::Freeform),
+    }
+}
+
 /// Load the MRU-style query history from disk (best-effort)
 fn load_history(path: PathBuf) -> Option<Vec<String>>
 {
@@ -1042,5 +1101,126 @@ fn in_anchor_dir(
     else
     {
         false
+    }
+}
+
+/// Minimal local auto-detect that defers to registered parsers in fail_signal.rs.
+/// This uses a conservative contract: try known parsers; return first non-empty.
+fn autodetect_and_parse(text: &str) -> Vec<crate::core::fail_signal::FailSignal> {
+    use crate::core::fail_signal::FailSignalParser;
+    
+    // The packet states RustcParser exists; attempt it first.
+    // If more parsers are exported, insert here in fixed order for determinism.
+    let parsers: [&dyn FailSignalParser; 1] = [&crate::core::fail_signal::RustcParser];
+    for p in parsers {
+        let out = p.parse(text);
+        if !out.is_empty() {
+            return out;
+        }
+    }
+    Vec::new()
+}
+
+/// Boost priorities for items proximal to fail signals.
+/// Deterministic: stable boost, stable sort by (priority desc, id asc).
+/// Complexity: O(n log n) over items.
+fn fail_signal_boost(items: &mut [Item], signals: &[crate::core::fail_signal::FailSignal], root: &Path) {
+    if signals.is_empty() {
+        return;
+    }
+
+    // Defensive local snapshot to keep iteration deterministic
+    // and avoid borrowing complexities.
+    let sigs: Vec<_> = signals
+        .iter()
+        .map(|s| {
+            // FailSignal contract: file, line_hits, severity
+            let w = match s.severity {
+                crate::core::fail_signal::Severity::Error => 3.0_f32,
+                crate::core::fail_signal::Severity::Warn => 1.5_f32,
+                crate::core::fail_signal::Severity::Info => 1.0_f32,
+            };
+            (s.file.clone(), &s.line_hits, w)
+        })
+        .collect();
+
+    // Apply boosts
+    for item in items.iter_mut() {
+        // Skip template items
+        if item.id.starts_with("__") {
+            continue;
+        }
+
+        // Parse item ID to extract file path and line range
+        // Format: "path/to/file.rs:start-end"
+        let (item_file, start_line, end_line) = if let Some(parsed) = parse_item_id(&item.id, root) {
+            parsed
+        } else {
+            continue;
+        };
+
+        let mut boost = 0.0_f32;
+        for (signal_file, line_hits, weight) in &sigs {
+            if same_file(root, &item_file, signal_file) {
+                for &signal_line in line_hits.iter() {
+                    let distance = distance_to_span(signal_line as u32, start_line, end_line);
+                    // Inverse-distance weighting; bounded, stable.
+                    // 1/(1+d) avoids div by zero and extreme spikes.
+                    let local = *weight / (1.0_f32 + distance as f32);
+                    // Cap aggregate to keep TVE guardrails; prevents outsized impact.
+                    boost += local.min(2.0_f32);
+                }
+            }
+        }
+
+        if boost > 0.0 {
+            // Apply a gentle multiplier + additive nudge to preserve ordering when equal.
+            let old_priority = item.priority;
+            let multiplier = (1.0_f32 + (boost * 0.15_f32)).min(1.5_f32);
+            let additive = (boost * 0.05_f32).min(0.5_f32);
+            
+            item.priority = Priority::custom(
+                (old_priority.level as f32 * multiplier + additive * 255.0).min(255.0) as u8,
+                (old_priority.relevance * multiplier + additive * 0.1).min(1.0),
+                (old_priority.proximity * multiplier + additive * 0.1).min(1.0),
+            );
+        }
+    }
+}
+
+/// Parse item ID to extract file path and line range
+/// Returns (file_path, start_line, end_line) or None if parsing fails
+fn parse_item_id(id: &str, root: &Path) -> Option<(PathBuf, u32, u32)> {
+    // Format: "path/to/file.rs:start-end"
+    let colon_pos = id.rfind(':')?;
+    let file_part = &id[..colon_pos];
+    let line_part = &id[colon_pos + 1..];
+    
+    // Parse line range "start-end"
+    let dash_pos = line_part.find('-')?;
+    let start_str = &line_part[..dash_pos];
+    let end_str = &line_part[dash_pos + 1..];
+    
+    let start_line: u32 = start_str.parse().ok()?;
+    let end_line: u32 = end_str.parse().ok()?;
+    
+    // Convert to absolute path if relative
+    let file_path = if Path::new(file_part).is_absolute() {
+        PathBuf::from(file_part)
+    } else {
+        root.join(file_part)
+    };
+    
+    Some((file_path, start_line, end_line))
+}
+
+/// Calculate distance from a line to a span
+fn distance_to_span(line: u32, start: u32, end: u32) -> u32 {
+    if line < start {
+        start - line
+    } else if line > end {
+        line.saturating_sub(end)
+    } else {
+        0
     }
 }

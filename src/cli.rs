@@ -547,13 +547,47 @@ pub struct CompletionsArgs
     pub stdout: bool,
 }
 
-#[derive(Debug, Clone, clap::ValueEnum)]
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
 pub enum ContextTemplate
 {
     Refactor,
     Bugfix,
     Feature,
     Freeform,
+}
+
+#[derive(Clone, Debug)]
+pub enum TemplateArg {
+    Preset(ContextTemplate),
+    Path(PathBuf),
+}
+
+impl FromStr for TemplateArg {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let lower = s.to_ascii_lowercase();
+        // accept the known presets first
+        match lower.as_str() {
+            "refactor" => return Ok(TemplateArg::Preset(ContextTemplate::Refactor)),
+            "bugfix" => return Ok(TemplateArg::Preset(ContextTemplate::Bugfix)),
+            "feature" => return Ok(TemplateArg::Preset(ContextTemplate::Feature)),
+            "freeform" => return Ok(TemplateArg::Preset(ContextTemplate::Freeform)),
+            _ => {}
+        }
+
+        // otherwise treat it as a filesystem path
+        let p = PathBuf::from(s);
+        if p.exists() {
+            Ok(TemplateArg::Path(p))
+        } else {
+            Err(format!(
+                "invalid value '{}' for --template: \
+                 expected one of [refactor, bugfix, feature, freeform] or an existing file path",
+                s
+            ))
+        }
+    }
 }
 
 #[derive(Parser, Debug)]
@@ -583,9 +617,9 @@ pub struct ContextArgs
     #[arg(long)]
     pub semantic: bool,
 
-    /// Preferred template
-    #[arg(long, value_enum, default_value_t = ContextTemplate::Freeform)]
-    pub template: ContextTemplate,
+    /// Use a preset template [refactor|bugfix|feature|freeform] or provide a path to a template file.
+    #[arg(long = "template", value_name = "TEMPLATE", value_parser = TemplateArg::from_str)]
+    pub template: Option<TemplateArg>,
 
     /// Anchor file to prefer for local scope/proximity ranking
     #[arg(long)]
@@ -631,6 +665,10 @@ pub struct ContextArgs
     /// Filter items below novelty threshold using TF-IDF rarity (0.0-1.0)
     #[arg(long = "novelty-min", value_name = "THRESHOLD")]
     pub novelty_min: Option<f64>,
+
+    /// Optional path to a compiler/test log to seed fail signals
+    #[arg(long = "fail-signal", value_name = "PATH")]
+    pub fail_signal: Option<PathBuf>,
 }
 
 #[derive(Parser, Debug)]

@@ -16,7 +16,16 @@ fn test_template_override_is_applied()
     // Create a small fixture project to feed the command.
     let tmp = assert_fs::TempDir::new().expect("tempdir");
     tmp.child("src/main.rs")
-        .write_str("fn main() { println!(\"hi\"); }")
+        .write_str(r#"
+fn main() { 
+    println!("hi"); 
+}
+
+fn test_query() {
+    // This function matches our query
+    println!("test function");
+}
+"#)
         .expect("write");
     // Create a simple template file with a unique marker token.
     let tpl = tmp.child("ctx.tpl");

@@ -1,0 +1,18 @@
+error[E0425]: cannot find value `x` in this scope
+  --> src/lib.rs:85:13
+   |
+84 |     let y = 3;
+85 |     let z = x + y;
+   |             ^ not found in this scope
+   |
+   = help: a local variable with a similar name exists: `y`
+
+note: some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace
+
+warning: unused variable: `z`
+  --> src/lib.rs:85:9
+   |
+85 |     let z = x + y;
+   |         ^ help: if this is intentional, prefix it with an underscore: `_z`
+   |
+   = note: `#[warn(unused_variables)]` on by default
