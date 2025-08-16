@@ -673,6 +673,7 @@ impl EditEngine
                 while *i < lines.len()
                 {
                     let ln = lines[*i];
+                    
                     if ln
                         .trim_start()
                         .starts_with("```")
@@ -681,11 +682,10 @@ impl EditEngine
                         *i += 1;
                         break;
                     }
-                    else
-                    {
-                        body.push(ln.to_string());
-                        *i += 1;
-                    }
+                    
+                    body.push(ln.to_string());
+                    
+                    *i += 1;
                 }
                 // If EOF without closing fence, we still accept what we have.
                 return Ok(strip_crlf(&body.join("\n")));

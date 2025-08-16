@@ -18,6 +18,11 @@ impl ExtractionTarget
 {
     /// Parse a target string like
     /// "src/main.rs:1-5,10-15" or "C:\\src\\lib.rs:20-25".
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the input string is missing a file path or range spec,
+    /// if any range is invalid, or if no valid ranges are found.
     pub fn parse(input: &str) -> Result<Self>
     {
         // Normalize and trim surrounding whitespace

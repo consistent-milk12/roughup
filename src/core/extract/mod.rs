@@ -40,8 +40,33 @@ struct FileSpec
     spans: Vec<Span>,
 }
 
+/// Runs the extraction process based on the provided arguments and application context.
+///
+/// This function parses target specifications, expands context, merges spans, applies
+/// compaction, budgets tokens, renders snippets, writes the output to a file, and
+/// optionally copies the result to the clipboard.
+///
+/// # Arguments
+///
+/// * `args` - [`ExtractArgs`] containing extraction options and target specifications.
+/// * `ctx` - [`AppContext`] providing application-level configuration and state.
+///
+/// # Returns
+///
+/// * `Result<()>` - Returns `Ok(())` if extraction and writing succeed, or an error if
+///   any step fails.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - Target specifications are invalid.
+/// - File reading fails.
+/// - Directory creation or file writing fails.
+/// - Clipboard operations fail (if enabled).
+/// - Tokenizer loading or token budgeting fails.
+#[expect(clippy::too_many_lines, reason = "TODO: MARKED FOR REFACTOR")]
 pub fn run(
-    args: ExtractArgs,
+    args: &ExtractArgs,
     ctx: &AppContext,
 ) -> Result<()>
 {
@@ -465,8 +490,11 @@ fn render_snippet(
     {
         if annotate
         {
-            out.push_str(&format!(">>> {}:{}-{}\n", path.display(), start, end));
+            use std::fmt::Write;
+
+            let _ = writeln!(out, ">>> {}:{}-{}", path.display(), start, end);
         }
+
         out.push_str(body);
     }
     out

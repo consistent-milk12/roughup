@@ -9,7 +9,6 @@
 # Roughup artifacts
 .git
 /chunks/
-/symbols.jsonl
 *.rup.bak.*
 /.rup/
 
@@ -19,3 +18,5 @@
 # Internal docs
 .docs
 docs
+.temp.md
+CLAUDE.md

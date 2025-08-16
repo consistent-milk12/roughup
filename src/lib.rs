@@ -4,11 +4,13 @@
 //! Smart gitignore-aware processing with parallel execution and tree-sitter symbol
 //! extraction. Performance-first design with memory-mapped I/O and AST caching.
 
-/// Command-line interface with clap integration
-pub mod cli;
-
 /// Shell completion generation
 pub mod completion;
+
+pub mod anchor
+{
+    pub mod detect;
+}
 
 /// Core processing pipeline - High-performance extraction and analysis (2,847 lines
 /// total)
@@ -129,6 +131,13 @@ pub use core::{
     symbols_run, tree_run,
 };
 
-pub use cli::{AppContext, Cli, Commands};
+/// Command-line interface with clap integration
+pub mod cli;
+
+pub mod cli_ext
+{
+    pub mod anchor_cmd;
+}
+
 pub use infra::{Config, FileWalker, load_config};
 pub use parsers::{PythonExtractor, RustExtractor, SymbolExtractor};

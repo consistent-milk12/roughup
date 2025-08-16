@@ -29,6 +29,7 @@ pub struct NewlineIndex
 impl NewlineIndex
 {
     /// Build an index recording positions of '\n'.
+    #[must_use]
     pub fn build(bytes: &[u8]) -> Self
     {
         // Pre-allocate space for newline positions (heuristic: 1 NL per 48 bytes)
@@ -44,6 +45,7 @@ impl NewlineIndex
     /// Total number of logical lines.
     /// Empty => 0. Non-empty => (# of '\n') + 1.
     /// Note: A trailing '\n' yields an additional empty last line.
+    #[must_use] 
     pub fn line_count(&self) -> usize
     {
         if self.len == 0
@@ -58,6 +60,7 @@ impl NewlineIndex
         }
     }
 
+    #[must_use] 
     pub fn start_byte_of_line(
         &self,
         line1: usize,
@@ -86,6 +89,7 @@ impl NewlineIndex
 
     /// End byte (exclusive) of a 1-based line.
     /// For CRLF, excludes trailing '\r' before '\n'.
+    #[must_use] 
     pub fn end_byte_of_line(
         &self,
         line1: usize,
@@ -130,6 +134,7 @@ impl NewlineIndex
     }
 
     /// Byte range (start..end) for a 1-based inclusive line span.
+    #[must_use] 
     pub fn byte_range_for_lines(
         &self,
         start_line1: usize,
@@ -179,6 +184,7 @@ impl NewlineIndex
     /// 1-based line number covering the given byte offset.
     /// Offsets at '\n' belong to the next line. Clamps byte > len to len.
     /// Returns 0 for empty buffers.
+    #[must_use] 
     pub fn line_of_byte(
         &self,
         mut byte: usize,

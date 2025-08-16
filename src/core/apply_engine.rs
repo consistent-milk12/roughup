@@ -12,7 +12,7 @@ use crate::{
     core::{
         backup::BackupManager,
         edit::EditSpec,
-        git::{GitEngine, GitOptions},
+        git::{GitConflict, GitEngine, GitOptions},
         patch::{PatchConfig, generate_patches},
     },
 };
@@ -187,10 +187,7 @@ impl ApplyEngine for InternalEngine
                     {
                         crate::core::edit::EditConflict::FileNotFound(path) =>
                         {
-                            crate::core::git::GitConflict::Other(format!(
-                                "file not found: {}",
-                                path.display()
-                            ))
+                            GitConflict::Other(format!("file not found: {}", path.display()))
                         }
                         crate::core::edit::EditConflict::ContentMismatch {
                             file,
@@ -198,7 +195,7 @@ impl ApplyEngine for InternalEngine
                             actual_cid: _,
                         } =>
                         {
-                            crate::core::git::GitConflict::PreimageMismatch {
+                            GitConflict::PreimageMismatch {
                                 path: file.clone(),
                                 hunk: (0, 0),
                                 hint: "CID mismatch - content changed",
@@ -206,7 +203,7 @@ impl ApplyEngine for InternalEngine
                         }
                         crate::core::edit::EditConflict::SpanOutOfRange { file, span, .. } =>
                         {
-                            crate::core::git::GitConflict::Other(format!(
+                            GitConflict::Other(format!(
                                 "span out of range: {}:{}-{}",
                                 file.display(),
                                 span.0,
@@ -215,7 +212,8 @@ impl ApplyEngine for InternalEngine
                         }
                         crate::core::edit::EditConflict::OldContentMismatch { file, span } =>
                         {
-                            crate::core::git::GitConflict::PreimageMismatch {
+                            #[allow(clippy::cast_possible_truncation)]
+                            GitConflict::PreimageMismatch {
                                 path: file.clone(),
                                 hunk: (span.0 as u32, span.1 as u32),
                                 hint: "OLD content mismatch",
@@ -295,10 +293,7 @@ impl ApplyEngine for InternalEngine
                     {
                         crate::core::edit::EditConflict::FileNotFound(path) =>
                         {
-                            crate::core::git::GitConflict::Other(format!(
-                                "file not found: {}",
-                                path.display()
-                            ))
+                            GitConflict::Other(format!("file not found: {}", path.display()))
                         }
                         crate::core::edit::EditConflict::ContentMismatch {
                             file,
@@ -306,7 +301,7 @@ impl ApplyEngine for InternalEngine
                             actual_cid: _,
                         } =>
                         {
-                            crate::core::git::GitConflict::PreimageMismatch {
+                            GitConflict::PreimageMismatch {
                                 path: file.clone(),
                                 hunk: (0, 0),
                                 hint: "CID mismatch - content changed",
@@ -314,7 +309,7 @@ impl ApplyEngine for InternalEngine
                         }
                         crate::core::edit::EditConflict::SpanOutOfRange { file, span, .. } =>
                         {
-                            crate::core::git::GitConflict::Other(format!(
+                            GitConflict::Other(format!(
                                 "span out of range: {}:{}-{}",
                                 file.display(),
                                 span.0,
@@ -323,7 +318,7 @@ impl ApplyEngine for InternalEngine
                         }
                         crate::core::edit::EditConflict::OldContentMismatch { file, span } =>
                         {
-                            crate::core::git::GitConflict::PreimageMismatch {
+                            GitConflict::PreimageMismatch {
                                 path: file.clone(),
                                 hunk: (span.0 as u32, span.1 as u32),
                                 hint: "OLD content mismatch",

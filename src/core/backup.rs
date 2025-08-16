@@ -598,10 +598,10 @@ pub fn list_sessions(repo_root: &Path) -> Result<Vec<SessionIndexEntry>>
         {
             continue;
         }
-        match serde_json::from_str::<SessionIndexEntry>(t)
+        
+        if let Ok(e) = serde_json::from_str::<SessionIndexEntry>(t)
         {
-            Ok(e) => out.push(e),
-            Err(_) => continue, // tolerate partial/corrupt lines
+            out.push(e)
         }
     }
     Ok(out)

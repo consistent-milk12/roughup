@@ -1,100 +1,232 @@
 [package]
+# Project name
 name = "roughup"
+# Project version
 version = "0.1.0"
+# Rust edition
 edition = "2024"
+# Minimum supported Rust toolchain
+rust-version = "1.85"
+# One-line description
 description = "A super-fast, lightweight CLI for extracting and packaging source code for LLM workflows"
+# Dual license
 license = "MIT OR Apache-2.0"
+# Repository URL
 repository = "https://github.com/your-username/roughup"
+# Crates.io keywords
 keywords = ["cli", "llm", "extraction", "source-code", "symbols"]
+# Crates.io categories
 categories = ["command-line-utilities", "development-tools"]
 
 [[bin]]
+# Binary name
 name = "rup"
+# Entry point
 path = "src/main.rs"
 
 [dependencies]
+# --- CLI & UX ---
+
+# Command-line parser (derive macros + cargo-style help)
 clap = { version = "4.5.45", features = ["derive", "cargo"] }
+# Shell completions generator
 clap_complete = "4.5.57"
-
-ignore = "0.4.23"
-globset = "0.4.16"
-
-rayon = "1.11.0"
-memmap2 = "0.9.7"
-
-config = "0.15.14"
-serde = { version = "1.0.219", features = ["derive"] }
-serde_json = "1.0.142"
-toml = "0.9.5"
-chrono = { version = "0.4.41", features = ["serde"] }
-
-anyhow = "1.0.99"
-thiserror = "2.0.14"
-memchr = "2.7.5"
-regex = "1.11.1"
-
+# Manpage generator for clap
+clap_mangen = "0.2.29"
+# Colored terminal output
 owo-colors = "4.2.2"
+# Pretty tree printing
 ptree = "0.5.2"
+# Progress bars and spinners
 indicatif = "0.18.0"
+# Pretty ASCII tables for hints/explain views
+tabled = "0.20.0"
+# Expand ~ and $VAR in user paths
+shellexpand = "3.1.1"
 
-# AST parsing & caching
-tree-sitter = { version = "0.25.8" }
-tree-sitter-rust = { version = "0.24.0" }
-tree-sitter-python = { version = "0.23.6" }
-tree-sitter-javascript = { version = "0.23.1" }
-tree-sitter-typescript = { version = "0.23.2" }
-tree-sitter-go = { version = "0.23.4" }
-tree-sitter-cpp = { version = "0.23.4" }
+# --- Filesystem, walking, globbing, locking ---
+
+# .gitignore and ignore rules traversal
+ignore = "0.4.23"
+# Fast glob matching
+globset = "0.4.16"
+# Windows-friendly canonicalize for paths
+dunce = "1.0.5"
+# UTF-8 path types for safer serialization
+camino = { version = "1.1.11", features = ["serde", "proptest", "serde1"] }
+# Cross-process advisory file locks
+fd-lock = "4.0.4"
+# File change notifications
+notify = "8.2.0"
+
+# --- Text scanning & regex stack (ripgrep family) ---
+
+# Fast byte search primitives
+memchr = "2.7.5"
+# Byte string utilities
+bstr = "1.12.0"
+# High-level regex engine
+regex = "1.11.1"
+# DFA/NFA regex automata (low-level; ripgrep-grade)
+regex-automata = "0.4.9"
+# Multi-pattern search (Aho-Corasick)
+aho-corasick = "1.1.3"
+# Fast line-oriented searcher core
+grep-searcher = "0.1.14"
+# Regex matcher integration for grep-searcher
+grep-regex = "0.1.13"
+
+# --- Concurrency & performance ---
+
+# Data-parallelism
+rayon = "1.11.0"
+# Memory-mapped IO
+memmap2 = "0.9.7"
+# High-performance in-memory cache
 moka = { version = "0.12.10", features = ["sync"] }
-
-# Tokenization
-tokenizers = { version = "0.21.4" }
-tiktoken-rs = { version = "0.7.0" }
-
-# Clipboard (optional)
-arboard = { version = "3.6.0" }
+# Small inline vectors to reduce heap allocations
 smallvec = "1.15.1"
 
-# Deterministic hashing for CID
+# --- Data structures & algorithms ---
+
+# Deterministic maps/sets (insertion order)
+indexmap = "2.10.0"
+# Iterator utilities
+itertools = "0.14.0"
+# Graph algorithms & DOT output (callgraph)
+petgraph = "0.8.2"
+# Finite state transducers for compact indices
+fst = "0.4.7"
+# Text diffs for range composer
+similar = "2.7.0"
+# Optional inverted index for full-text code search
+tantivy = "0.24.2"
+
+# --- Config & serialization ---
+
+# Layered configuration reader
+config = "0.15.14"
+# Serialization framework
+serde = { version = "1.0.219", features = ["derive"] }
+# JSON support
+serde_json = "1.0.142"
+# TOML support
+toml = "0.9.5"
+# Timestamps with serde
+chrono = { version = "0.4.41", features = ["serde"] }
+
+# --- Errors, diagnostics & tracing ---
+
+# Simple error handling
+anyhow = "1.0.99"
+# Derive custom error types
+thiserror = "2.0.14"
+# Structured logging & spans
+tracing = { version = "0.1.41", features = ["attributes"] }
+# Subscriber with env filter and pretty output
+tracing-subscriber = { version = "0.3.19", features = [
+    "chrono",
+    "env-filter",
+    "fmt",
+    "serde",
+    "serde_json",
+    "time",
+    "tracing-serde",
+] }
+# Friendly, labeled diagnostics for CLI
+miette = { version = "7.6.0", features = ["fancy"] }
+# Source snippet highlighting and labels
+ariadne = "0.5.1"
+
+# --- AST parsing & symbolization (Tree-sitter family) ---
+
+# Tree-sitter core
+tree-sitter = "0.25.8"
+# Rust grammar
+tree-sitter-rust = "0.24.0"
+# Python grammar
+tree-sitter-python = "0.23.6"
+# JavaScript grammar
+tree-sitter-javascript = "0.23.1"
+# TypeScript grammar
+tree-sitter-typescript = "0.23.2"
+# Go grammar
+tree-sitter-go = "0.23.4"
+# C++ grammar
+tree-sitter-cpp = "0.23.4"
+
+# --- Tokenization (LLM budgeting) ---
+
+# HuggingFace tokenizers
+tokenizers = "0.21.4"
+# OpenAI tiktoken-compatible tokenizer
+tiktoken-rs = "0.7.0"
+
+# --- Hashing & integrity ---
+
+# Fast non-crypto hashing (ids, dedupe)
 xxhash-rust = { version = "0.8.15", features = ["xxh64"] }
-
-# Atomic file operations
-tempfile = "3.20.0"
+# Cryptographic hashing for guard-hash
 blake3 = "1.8.2"
+
+# --- System utilities ---
+
+# Secure temp files
+tempfile = "3.20.0"
+# Randomness utilities
 rand = { version = "0.9.2", features = ["std"] }
-predicates = "3.1.3"
-assert_cmd = "2.0.17"
-assert_fs = "1.1.3"
-
-# Optional syn backend for Rust parsing
-syn = { version = "2.0.105", features = ["full"], optional = true }
-quote = { version = "1.0.40", optional = true }
-proc-macro2 = { version = "1.0.97", optional = true }
-bytecount = { version = "0.6.9", optional = true }
-
-# Platform-specific dependencies
-[target.'cfg(unix)'.dependencies]
+# libc bindings for unix specifics
 libc = "0.2.175"
+# Clipboard interaction
+arboard = "3.6.0"
+
+# --- Optional Rust source parsing (now on by default) ---
+
+# Full Rust AST parsing
+syn = { version = "2.0.106", features = ["full"] }
+# Token-stream quoting
+quote = "1.0.40"
+# Procedural macro token streams
+proc-macro2 = "1.0.97"
+# Fast byte counting helpers
+bytecount = "0.6.9"
 
 [build-dependencies]
-cc = "*" # helps some tree-sitter grammar builds on CI
-
-[features]
-default = []
-rust_syn = ["syn", "quote", "proc-macro2", "bytecount"]
+# Build helper for native grammars (tree-sitter)
+cc = "1.2.33"
 
 [dev-dependencies]
+# Snapshot tests for JSON/CLI outputs
+insta = { version = "1.43.1", features = ["yaml"] }
+# Property tests for allocator/range composer
+proptest = "1.7.0"
+# JSON schema generation for manifests/sidecars
+schemars = "1.0.4"
+# CLI testing
+assert_cmd = "2.0.17"
+# Filesystem fixtures
+assert_fs = "1.1.3"
+# Assertions with predicates
+predicates = "3.1.3"
 
 [profile.release]
+# Optimize for speed
 opt-level = 3
-lto = "thin"        # faster than “true” (fat LTO)
+# Thin LTO for faster link + good size
+lto = "thin"
+# Single codegen unit for better optimization
 codegen-units = 1
+# Strip debug info from binaries
 strip = "debuginfo"
 
-
 [profile.dev]
-opt-level = 1          # small runtime win, compile still fast
+# Small runtime wins without hurting compile time
+opt-level = 1
+# Keep debug symbols
 debug = true
+# Trap on overflow
 overflow-checks = true
+# Speed up iterative builds
 incremental = true
-codegen-units = 16     # default-ish; makes dev builds much faster
+# More parallel codegen for dev builds
+codegen-units = 16

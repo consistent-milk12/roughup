@@ -1284,98 +1284,107 @@ enum DiffOp
 }
 
 fn diff_hunks(
-    a: &[&str],
-    b: &[&str],
-    ctx: usize,
+    original_lines: &[&str],
+    modified_lines: &[&str],
+    context: usize,
 ) -> Vec<(usize, usize, usize, usize, Vec<DiffOp>)>
 {
-    let (n, m) = (a.len(), b.len());
-    let mut dp = vec![vec![0usize; m + 1]; n + 1];
-    for i in (0..n).rev()
+    let (original_len, modified_len) = (original_lines.len(), modified_lines.len());
+    let mut lcs_table = vec![vec![0usize; modified_len + 1]; original_len + 1];
+    for original_idx in (0..original_len).rev()
     {
-        for j in (0..m).rev()
+        for modified_idx in (0..modified_len).rev()
         {
-            dp[i][j] = if a[i] == b[j]
+            lcs_table[original_idx][modified_idx] = if original_lines[original_idx]
+                == modified_lines[modified_idx]
             {
-                dp[i + 1][j + 1] + 1
+                lcs_table[original_idx + 1][modified_idx + 1] + 1
             }
             else
             {
-                dp[i + 1][j].max(dp[i][j + 1])
+                lcs_table[original_idx + 1][modified_idx]
+                    .max(lcs_table[original_idx][modified_idx + 1])
             };
         }
     }
-    let mut ops = Vec::<DiffOp>::new();
-    let (mut i, mut j) = (0, 0);
-    while i < n || j < m
+    let mut diff_ops = Vec::<DiffOp>::new();
+    let (mut original_pos, mut modified_pos) = (0, 0);
+    while original_pos < original_len || modified_pos < modified_len
     {
-        if i < n && j < m && a[i] == b[j]
+        if original_pos < original_len
+            && modified_pos < modified_len
+            && original_lines[original_pos] == modified_lines[modified_pos]
         {
-            push(&mut ops, DiffOp::Equal(1));
-            i += 1;
-            j += 1;
+            push(&mut diff_ops, DiffOp::Equal(1));
+            original_pos += 1;
+            modified_pos += 1;
         }
-        else if j < m && (i == n || dp[i][j + 1] >= dp[i + 1][j])
+        else if modified_pos < modified_len
+            && (original_pos == original_len
+                || lcs_table[original_pos][modified_pos + 1]
+                    >= lcs_table[original_pos + 1][modified_pos])
         {
-            push(&mut ops, DiffOp::Add(1));
-            j += 1;
+            push(&mut diff_ops, DiffOp::Add(1));
+            modified_pos += 1;
         }
         else
         {
-            push(&mut ops, DiffOp::Del(1));
-            i += 1;
+            push(&mut diff_ops, DiffOp::Del(1));
+            original_pos += 1;
         }
     }
     // Build hunks with fixed context.
     let mut hunks = Vec::new();
-    let mut a_cur = 0usize;
-    let mut b_cur = 0usize;
-    let mut win = Vec::<(usize, usize, DiffOp)>::new();
+    let mut original_cur = 0usize;
+    let mut modified_cur = 0usize;
+    let mut window = Vec::<(usize, usize, DiffOp)>::new();
 
-    for op in ops
+    for op in diff_ops
     {
         match op
         {
-            DiffOp::Equal(k) =>
+            DiffOp::Equal(equal_count) =>
             {
-                if !win.is_empty()
+                if !window.is_empty()
                 {
-                    let take = k.min(ctx);
-                    win.push((a_cur, b_cur, DiffOp::Equal(take)));
-                    let (a_lo, a_hi, b_lo, b_hi, h) = flush(&win, ctx);
-                    hunks.push((a_lo, a_hi, b_lo, b_hi, h));
-                    win.clear();
-                    a_cur += k;
-                    b_cur += k;
+                    let take = equal_count.min(context);
+                    window.push((original_cur, modified_cur, DiffOp::Equal(take)));
+                    let (original_lo, original_hi, modified_lo, modified_hi, hunk_ops) =
+                        flush(&window, context);
+                    hunks.push((original_lo, original_hi, modified_lo, modified_hi, hunk_ops));
+                    window.clear();
+                    original_cur += equal_count;
+                    modified_cur += equal_count;
                 }
                 else
                 {
-                    let keep = k.min(ctx);
+                    let keep = equal_count.min(context);
                     if keep > 0
                     {
-                        win.push((a_cur, b_cur, DiffOp::Equal(keep)));
+                        window.push((original_cur, modified_cur, DiffOp::Equal(keep)));
                     }
-                    a_cur += k;
-                    b_cur += k;
+                    original_cur += equal_count;
+                    modified_cur += equal_count;
                 }
             }
-            DiffOp::Add(_k) | DiffOp::Del(_k) =>
+
+            DiffOp::Add(_count) | DiffOp::Del(_count) =>
             {
-                if win.is_empty()
+                if window.is_empty()
                 {
-                    let back_a = a_cur.saturating_sub(ctx);
-                    let back_b = b_cur.saturating_sub(ctx);
-                    let keep = (a_cur - back_a).min(b_cur - back_b);
+                    let back_original = original_cur.saturating_sub(context);
+                    let back_modified = modified_cur.saturating_sub(context);
+                    let keep = (original_cur - back_original).min(modified_cur - back_modified);
                     if keep > 0
                     {
-                        win.push((back_a, back_b, DiffOp::Equal(keep)));
+                        window.push((back_original, back_modified, DiffOp::Equal(keep)));
                     }
                 }
-                win.push((a_cur, b_cur, op));
+                window.push((original_cur, modified_cur, op));
                 match op
                 {
-                    DiffOp::Add(x) => b_cur += x,
-                    DiffOp::Del(x) => a_cur += x,
+                    DiffOp::Add(x) => modified_cur += x,
+                    DiffOp::Del(x) => original_cur += x,
                     _ =>
                     {}
                 }
@@ -1383,10 +1392,11 @@ fn diff_hunks(
         }
     }
 
-    if !win.is_empty()
+    if !window.is_empty()
     {
-        let (a_lo, a_hi, b_lo, b_hi, h) = flush(&win, ctx);
-        hunks.push((a_lo, a_hi, b_lo, b_hi, h));
+        let (original_lo, original_hi, modified_lo, modified_hi, hunk_ops) =
+            flush(&window, context);
+        hunks.push((original_lo, original_hi, modified_lo, modified_hi, hunk_ops));
     }
 
     if hunks.is_empty()

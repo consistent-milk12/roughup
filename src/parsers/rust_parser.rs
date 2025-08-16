@@ -1,22 +1,22 @@
 //! Filepath: src/parsers/rust_extractor.rs
+//!
+//! Rust symbol extractor backed by Tree-sitter (fast, single-file parse).
+//! Uses tree-sitter 0.25.8 APIs (Parser::set_language(&Language),
+//! QueryCursor::matches with StreamingIterator).
 
 use std::path::Path;
 
-use anyhow::Result;
-// Syn backend (optional via rust_syn feature)
-#[cfg(feature = "rust_syn")]
-use syn::{File as SynFile, Item};
-// Tree-sitter backend (default)
-#[cfg(not(feature = "rust_syn"))]
+use anyhow::{Result, anyhow};
 use tree_sitter::{Language, Node, Parser, Query, QueryCursor, StreamingIterator};
 
-use crate::core::symbols::{Symbol, SymbolExtractor, SymbolKind};
-#[cfg(not(feature = "rust_syn"))]
-use crate::core::symbols::{Visibility, build_qualified_name, parse_visibility};
-// Keep tree-sitter utility for default backend
-#[cfg(not(feature = "rust_syn"))]
-use crate::infra::utils::TsNodeUtils;
+use crate::{
+    core::symbols::{
+        Symbol, SymbolExtractor, SymbolKind, Visibility, build_qualified_name, parse_visibility,
+    },
+    infra::utils::TsNodeUtils,
+};
 
+/// Extractor with a pluggable backend (currently Tree-sitter only).
 pub struct RustExtractor
 {
     backend: RustBackend,
@@ -24,54 +24,54 @@ pub struct RustExtractor
 
 enum RustBackend
 {
-    #[cfg(not(feature = "rust_syn"))]
+    /// Tree-sitter backend: holds the compiled language and query.
     TreeSitter
     {
         language: Language,
         items_query: Query,
     },
-    #[cfg(feature = "rust_syn")]
-    Syn,
 }
 
 impl RustExtractor
 {
+    /// Create a new Rust extractor using Tree-sitter.
+    ///
+    /// Notes:
+    /// - tree-sitter-rust 0.24 exposes a `LANGUAGE` constant; convert to `Language` with
+    ///   `.into()`.
+    /// - Parser::set_language takes `&Language` on tree-sitter 0.25+.
+    ///   :contentReference[oaicite:2]{index=2}
     pub fn new() -> Result<Self>
     {
-        #[cfg(not(feature = "rust_syn"))]
-        {
-            // Existing Tree-sitter setup
-            let language = tree_sitter_rust::LANGUAGE.into();
+        // Prefer the LANGUAGE constant + into(); this is what the Rust grammar documents.
+        let language = {
+            let lf = tree_sitter_rust::LANGUAGE;
+            lf.into()
+        };
 
-            let items_query_src = r#"
-                (function_item) @function
-                (struct_item)   @struct
-                (enum_item)     @enum
-                (trait_item)    @trait
-                (type_item)     @type_alias
-                (const_item)    @constant
-                (static_item)   @static
-                (mod_item)      @module
+        // Single query that tags top-level items and (trait|impl) methods.
+        let items_query_src = r#"
+            (function_item) @function
+            (struct_item)   @struct
+            (enum_item)     @enum
+            (trait_item)    @trait
+            (type_item)     @type_alias
+            (const_item)    @constant
+            (static_item)   @static
+            (mod_item)      @module
 
-                (impl_item
-                  (declaration_list (function_item) @method))
-                (trait_item
-                  (declaration_list (function_item) @trait_method))
-            "#;
+            (impl_item
+              (declaration_list (function_item) @method))
+            (trait_item
+              (declaration_list (function_item) @trait_method))
+        "#;
 
-            let items_query = Query::new(&language, items_query_src)
-                .map_err(|e| anyhow::anyhow!("create Rust items query: {}", e))?;
+        let items_query = Query::new(&language, items_query_src)
+            .map_err(|e| anyhow!("create Rust items query: {e}"))?;
 
-            return Ok(Self {
-                backend: RustBackend::TreeSitter { language, items_query },
-            });
-        }
-
-        #[cfg(feature = "rust_syn")]
-        {
-            // Syn backend has no upfront work
-            Ok(Self { backend: RustBackend::Syn })
-        }
+        Ok(Self {
+            backend: RustBackend::TreeSitter { language, items_query },
+        })
     }
 }
 
@@ -85,26 +85,17 @@ impl SymbolExtractor for RustExtractor
     {
         match &self.backend
         {
-            #[cfg(not(feature = "rust_syn"))]
             RustBackend::TreeSitter { language, items_query } =>
             {
-                // Existing Tree-sitter implementation
                 tree_sitter_extract_symbols(language, items_query, content, file_path)
-            }
-            #[cfg(feature = "rust_syn")]
-            RustBackend::Syn =>
-            {
-                // Conservative syn-based extraction
-                syn_extract_symbols(content, file_path)
             }
         }
     }
-
-    // Default `postprocess` is fine; we inherit deterministic sorting.
+    // postprocess() inherited: keeps deterministic sorting.
 }
 
-// Tree-sitter implementation (moved from impl block)
-#[cfg(not(feature = "rust_syn"))]
+// === Tree-sitter implementation ===
+
 fn tree_sitter_extract_symbols(
     language: &Language,
     items_query: &Query,
@@ -113,20 +104,22 @@ fn tree_sitter_extract_symbols(
 ) -> Result<Vec<Symbol>>
 {
     let mut parser = Parser::new();
-    parser.set_language(language)?;
+    parser.set_language(language)?; // takes &Language on 0.25+  :contentReference[oaicite:3]{index=3}
 
     let tree = parser
         .parse(content, None)
-        .ok_or_else(|| anyhow::anyhow!("Failed to parse Rust source"))?;
+        .ok_or_else(|| anyhow!("Failed to parse Rust source"))?;
     let bytes = content.as_bytes();
 
     let mut cursor = QueryCursor::new();
+
+    // Iteration requires `StreamingIterator` to be in scope.
+    // :contentReference[oaicite:4]{index=4}
     let mut matches = cursor.matches(items_query, tree.root_node(), bytes);
 
     let cap_names: Vec<&str> = items_query
         .capture_names()
         .to_vec();
-
     let mut out = Vec::new();
 
     while let Some(m) = matches.next()
@@ -136,7 +129,6 @@ fn tree_sitter_extract_symbols(
         for cap in m.captures
         {
             let cname = cap_names[cap.index as usize];
-
             if matches!(
                 cname,
                 "function"
@@ -169,8 +161,8 @@ fn tree_sitter_extract_symbols(
         {
             ("function", false, false) => Some(SymbolKind::Function),
             ("method" | "trait_method", _, _) => Some(SymbolKind::Method),
-            ("function", true, _) => None, // Skip: Treated as method
-            ("function", _, true) => None, // Skip: Treated as method
+            ("function", true, _) => None, // function inside impl => treat as method
+            ("function", _, true) => None, // function inside trait => treat as method
             ("struct", ..) => Some(SymbolKind::Struct),
             ("enum", ..) => Some(SymbolKind::Enum),
             ("trait", ..) => Some(SymbolKind::Trait),
@@ -191,271 +183,8 @@ fn tree_sitter_extract_symbols(
     Ok(out)
 }
 
-// Syn implementation (conservative extraction)
-#[cfg(feature = "rust_syn")]
-fn syn_extract_symbols(
-    content: &str,
-    file_path: &Path,
-) -> Result<Vec<Symbol>>
-{
-    let ast: SynFile = syn::parse_file(content)?;
-    let mut out = Vec::new();
+// === Helpers (Tree-sitter) ===
 
-    // Walk top-level items; build Symbol with byte/line spans.
-    for item in &ast.items
-    {
-        // Narrow to functions/structs/enums/traits/impls, etc.
-        match item
-        {
-            Item::Fn(f) =>
-            {
-                let name = f
-                    .sig
-                    .ident
-                    .to_string();
-                let (byte_start, byte_end) = byte_span(item, content);
-                let (start_line, end_line) = line_span(item, content);
-                out.push(Symbol {
-                    file: file_path.to_path_buf(),
-                    lang: "rust".into(),
-                    kind: SymbolKind::Function,
-                    name: name.clone(),
-                    qualified_name: name, // keep simple; we can qualify later
-                    byte_start,
-                    byte_end,
-                    start_line,
-                    end_line,
-                    visibility: None,
-                    doc: None,
-                });
-            }
-            Item::Struct(s) =>
-            {
-                let name = s
-                    .ident
-                    .to_string();
-                let (byte_start, byte_end) = byte_span(item, content);
-                let (start_line, end_line) = line_span(item, content);
-                out.push(Symbol {
-                    file: file_path.to_path_buf(),
-                    lang: "rust".into(),
-                    kind: SymbolKind::Struct,
-                    name: name.clone(),
-                    qualified_name: name,
-                    byte_start,
-                    byte_end,
-                    start_line,
-                    end_line,
-                    visibility: None,
-                    doc: None,
-                });
-            }
-            Item::Enum(e) =>
-            {
-                let name = e
-                    .ident
-                    .to_string();
-                let (byte_start, byte_end) = byte_span(item, content);
-                let (start_line, end_line) = line_span(item, content);
-                out.push(Symbol {
-                    file: file_path.to_path_buf(),
-                    lang: "rust".into(),
-                    kind: SymbolKind::Enum,
-                    name: name.clone(),
-                    qualified_name: name,
-                    byte_start,
-                    byte_end,
-                    start_line,
-                    end_line,
-                    visibility: None,
-                    doc: None,
-                });
-            }
-            Item::Trait(t) =>
-            {
-                let name = t
-                    .ident
-                    .to_string();
-                let (byte_start, byte_end) = byte_span(item, content);
-                let (start_line, end_line) = line_span(item, content);
-                out.push(Symbol {
-                    file: file_path.to_path_buf(),
-                    lang: "rust".into(),
-                    kind: SymbolKind::Trait,
-                    name: name.clone(),
-                    qualified_name: name,
-                    byte_start,
-                    byte_end,
-                    start_line,
-                    end_line,
-                    visibility: None,
-                    doc: None,
-                });
-            }
-            Item::Type(ty) =>
-            {
-                let name = ty
-                    .ident
-                    .to_string();
-                let (byte_start, byte_end) = byte_span(item, content);
-                let (start_line, end_line) = line_span(item, content);
-                out.push(Symbol {
-                    file: file_path.to_path_buf(),
-                    lang: "rust".into(),
-                    kind: SymbolKind::TypeAlias,
-                    name: name.clone(),
-                    qualified_name: name,
-                    byte_start,
-                    byte_end,
-                    start_line,
-                    end_line,
-                    visibility: None,
-                    doc: None,
-                });
-            }
-            Item::Const(c) =>
-            {
-                let name = c
-                    .ident
-                    .to_string();
-                let (byte_start, byte_end) = byte_span(item, content);
-                let (start_line, end_line) = line_span(item, content);
-                out.push(Symbol {
-                    file: file_path.to_path_buf(),
-                    lang: "rust".into(),
-                    kind: SymbolKind::Constant,
-                    name: name.clone(),
-                    qualified_name: name,
-                    byte_start,
-                    byte_end,
-                    start_line,
-                    end_line,
-                    visibility: None,
-                    doc: None,
-                });
-            }
-            Item::Static(s) =>
-            {
-                let name = s
-                    .ident
-                    .to_string();
-                let (byte_start, byte_end) = byte_span(item, content);
-                let (start_line, end_line) = line_span(item, content);
-                out.push(Symbol {
-                    file: file_path.to_path_buf(),
-                    lang: "rust".into(),
-                    kind: SymbolKind::Variable,
-                    name: name.clone(),
-                    qualified_name: name,
-                    byte_start,
-                    byte_end,
-                    start_line,
-                    end_line,
-                    visibility: None,
-                    doc: None,
-                });
-            }
-            Item::Mod(m) =>
-            {
-                let name = m
-                    .ident
-                    .to_string();
-                let (byte_start, byte_end) = byte_span(item, content);
-                let (start_line, end_line) = line_span(item, content);
-                out.push(Symbol {
-                    file: file_path.to_path_buf(),
-                    lang: "rust".into(),
-                    kind: SymbolKind::Module,
-                    name: name.clone(),
-                    qualified_name: name,
-                    byte_start,
-                    byte_end,
-                    start_line,
-                    end_line,
-                    visibility: None,
-                    doc: None,
-                });
-            }
-            Item::Impl(impl_item) =>
-            {
-                // Extract methods from impl blocks
-                for impl_item in &impl_item.items
-                {
-                    if let syn::ImplItem::Fn(method) = impl_item
-                    {
-                        let name = method
-                            .sig
-                            .ident
-                            .to_string();
-                        let (byte_start, byte_end) = byte_span_impl_item(impl_item, content);
-                        let (start_line, end_line) = line_span_impl_item(impl_item, content);
-                        out.push(Symbol {
-                            file: file_path.to_path_buf(),
-                            lang: "rust".into(),
-                            kind: SymbolKind::Method,
-                            name: name.clone(),
-                            qualified_name: name, // simplified for now
-                            byte_start,
-                            byte_end,
-                            start_line,
-                            end_line,
-                            visibility: None,
-                            doc: None,
-                        });
-                    }
-                }
-            }
-            _ =>
-            { /* skip other item types for conservative extraction */ }
-        }
-    }
-    Ok(out)
-}
-
-// Helpers for syn span mapping (coarse but functional)
-#[cfg(feature = "rust_syn")]
-fn byte_span<N: quote::ToTokens>(
-    _node: &N,
-    content: &str,
-) -> (usize, usize)
-{
-    // For MVP, fall back to coarse spans - whole content range
-    // This is conservative but ensures we don't miss any content
-    (0, content.len())
-}
-
-#[cfg(feature = "rust_syn")]
-fn line_span<N: quote::ToTokens>(
-    _: &N,
-    content: &str,
-) -> (usize, usize)
-{
-    // With coarse byte_span, compute 1..=line_count
-    let lines = 1 + bytecount::count(content.as_bytes(), b'\n');
-    (1, lines)
-}
-
-#[cfg(feature = "rust_syn")]
-fn byte_span_impl_item(
-    _: &syn::ImplItem,
-    content: &str,
-) -> (usize, usize)
-{
-    (0, content.len())
-}
-
-#[cfg(feature = "rust_syn")]
-fn line_span_impl_item(
-    _: &syn::ImplItem,
-    content: &str,
-) -> (usize, usize)
-{
-    let lines = 1 + bytecount::count(content.as_bytes(), b'\n');
-    (1, lines)
-}
-
-// Tree-sitter helper functions (only compiled with default backend)
-#[cfg(not(feature = "rust_syn"))]
 fn build_symbol(
     kind: SymbolKind,
     node: Node,
@@ -466,9 +195,7 @@ fn build_symbol(
     let name = name_of(node, bytes)?;
     let visibility = visibility_of(node, bytes);
 
-    // Qualified name assembly:
-    // - Methods: use owner from enclosing impl/trait.
-    // - Others: prefix with enclosing module path (crate::a::b::Name).
+    // Methods: prepend owner (impl/trait). Others: prepend enclosing mod path.
     let qualified_name = if kind == SymbolKind::Method
     {
         if let Some(owner) = owner_of_method(node, bytes)
@@ -494,7 +221,6 @@ fn build_symbol(
     };
 
     let doc = gather_leading_rust_docs(node, bytes);
-
     let start = node.start_position();
     let end = node.end_position();
 
@@ -513,9 +239,8 @@ fn build_symbol(
     })
 }
 
-#[cfg(not(feature = "rust_syn"))]
-fn first_named_child_text<'a>(
-    node: Node<'a>,
+fn first_named_child_text(
+    node: Node<'_>,
     bytes: &[u8],
     kinds: &[&str],
 ) -> Option<String>
@@ -535,7 +260,6 @@ fn first_named_child_text<'a>(
     None
 }
 
-#[cfg(not(feature = "rust_syn"))]
 fn name_of(
     node: Node,
     bytes: &[u8],
@@ -552,7 +276,6 @@ fn name_of(
     first_named_child_text(node, bytes, &["identifier", "type_identifier"])
 }
 
-#[cfg(not(feature = "rust_syn"))]
 fn visibility_of(
     node: Node,
     bytes: &[u8],
@@ -562,21 +285,22 @@ fn visibility_of(
     {
         let c = node.named_child(i)?;
         if c.kind() == "visibility_modifier"
-            && let Ok(t) = c.utf8_text(bytes)
         {
-            return parse_visibility(t);
+            if let Ok(t) = c.utf8_text(bytes)
+            {
+                return parse_visibility(t);
+            }
         }
     }
     None
 }
 
-#[cfg(not(feature = "rust_syn"))]
 fn owner_of_method(
     mut node: Node,
     bytes: &[u8],
 ) -> Option<String>
 {
-    // Walk up to impl_item or trait_item, then extract the type or trait name.
+    // Walk up to impl_item or trait_item, then extract the type/trait name.
     while let Some(p) = node.parent()
     {
         match p.kind()
@@ -590,7 +314,7 @@ fn owner_of_method(
                         .ok()
                         .map(|s| s.to_string());
                 }
-                // Fallbacks to get something readable like `u32`, `a::b::Baz<T>`, etc.
+                // Fallbacks: something readable like `u32`, `a::b::Baz<T>`, ...
                 return first_named_child_text(p, bytes, &[
                     "type_identifier",
                     "scoped_type_identifier",
@@ -611,16 +335,12 @@ fn owner_of_method(
                 }
                 return first_named_child_text(p, bytes, &["type_identifier"]);
             }
-            _ =>
-            {
-                node = p;
-            }
+            _ => node = p,
         }
     }
     None
 }
 
-#[cfg(not(feature = "rust_syn"))]
 fn enclosing_module_path(
     mut node: Node,
     bytes: &[u8],
@@ -630,11 +350,17 @@ fn enclosing_module_path(
     while let Some(parent) = node.parent()
     {
         if parent.kind() == "mod_item"
-            && let Some(name_node) = parent.child_by_field_name("name")
-            && let Ok(t) = name_node.utf8_text(bytes)
-            && !t.is_empty()
         {
-            parts.push(t.to_string());
+            if let Some(name_node) = parent.child_by_field_name("name")
+            {
+                if let Ok(t) = name_node.utf8_text(bytes)
+                {
+                    if !t.is_empty()
+                    {
+                        parts.push(t.to_string());
+                    }
+                }
+            }
         }
         node = parent;
     }
@@ -655,7 +381,6 @@ fn enclosing_module_path(
     }
 }
 
-#[cfg(not(feature = "rust_syn"))]
 fn gather_leading_rust_docs(
     node: Node,
     bytes: &[u8],
@@ -736,7 +461,6 @@ mod tests
         sym.kind == kind && sym.name == name
     }
 
-    #[allow(unused)]
     fn get<'a>(
         syms: &'a [Symbol],
         kind: SymbolKind,
@@ -787,32 +511,23 @@ fn private_fn() {}
             .find(|s| s.kind == SymbolKind::Function && s.name == "hello_world")
             .expect("hello_world function not found");
 
-        // Tree-sitter backend preserves docs, syn backend doesn't for MVP
-        #[cfg(not(feature = "rust_syn"))]
-        {
-            assert_eq!(
-                pub_fn
-                    .doc
-                    .as_deref(),
-                Some("First Line\nSecond Line")
-            );
-        }
+        assert_eq!(
+            pub_fn
+                .doc
+                .as_deref(),
+            Some("First Line\nSecond Line")
+        );
         assert!(pub_fn.start_line >= 1 && pub_fn.end_line >= pub_fn.start_line);
 
-        #[allow(unused)]
         let priv_fn = syms
             .iter()
             .find(|s| s.kind == SymbolKind::Function && s.name == "private_fn")
             .expect("private_fn function not found");
-
-        #[cfg(not(feature = "rust_syn"))]
-        {
-            assert!(
-                priv_fn
-                    .doc
-                    .is_none()
-            );
-        }
+        assert!(
+            priv_fn
+                .doc
+                .is_none()
+        );
 
         Ok(())
     }
@@ -863,8 +578,6 @@ mod m {}
         Ok(())
     }
 
-    // Additional tests only work with tree-sitter backend due to detailed analysis
-    #[cfg(not(feature = "rust_syn"))]
     mod tree_sitter_tests
     {
         use super::*;
@@ -882,7 +595,7 @@ struct S;
 "#;
             let file = PathBuf::from("test.rs");
             let syms = extractor.extract_symbols(src, &file)?;
-            let s = get(&syms, SymbolKind::Struct, "S");
+            let s = super::get(&syms, SymbolKind::Struct, "S");
             assert_eq!(
                 s.doc
                     .as_deref(),
@@ -968,7 +681,7 @@ mod a { mod b { fn f() {} } }
 "#;
             let file = PathBuf::from("test.rs");
             let syms = extractor.extract_symbols(src, &file)?;
-            let f = get(&syms, SymbolKind::Function, "f");
+            let f = super::get(&syms, SymbolKind::Function, "f");
             assert!(
                 f.qualified_name
                     .ends_with("crate::a::b::f")

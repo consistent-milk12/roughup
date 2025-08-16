@@ -84,7 +84,7 @@ impl Default for Config
             symbols: SymbolsConfig {
                 languages: vec!["rust".to_string(), "python".to_string(), "javascript".to_string()],
                 include_private: false,
-                output_file: "symbols.jsonl".to_string(),
+                output_file: ".rup/symbols.jsonl".to_string(),
             },
             chunk: ChunkConfig {
                 max_tokens: 4000,

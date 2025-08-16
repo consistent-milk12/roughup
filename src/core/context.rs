@@ -14,7 +14,11 @@
 //!   files follow lexicographic path order.
 //! - Anchor equality and scope checks are robust to abs/rel path mismatches.
 
-use std::{borrow::Cow, collections::{BTreeSet, HashMap}, time::Instant}; // path views
+use std::{
+    borrow::Cow,
+    collections::{BTreeSet, HashMap},
+    time::Instant,
+}; // path views
 use std::{collections::VecDeque, path::Path}; // sort keys
 use std::{
     collections::{BTreeMap, HashSet},
@@ -39,7 +43,11 @@ use crate::core::symbol_index::{
     SymbolIndex,
 };
 use crate::core::symbols::Symbol; // symbol def
-use crate::infra::io::read_file_smart;
+use crate::{
+    cli_ext::anchor_cmd::{AnchorArgs, OutputFormat, validate_anchor_with_hints},
+    infra::io::read_file_smart,
+};
+use camino::Utf8Path;
 use crate::{
     core::{
         budgeter::{
@@ -503,6 +511,14 @@ impl ContextAssembler
         }
 
         let body = lines.join("\n") + "\n";
+
+        // Ensure parent directory exists
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                StdFs::create_dir_all(parent)
+                    .with_context(|| format!("Failed to create directory {}", parent.display()))?;
+            }
+        }
 
         StdFs::write(path, body).context("write history")
     }
@@ -1076,7 +1092,7 @@ impl ContextAssembler
         };
 
         // History (best effort)
-        let history = Self::load_history(root.join(".roughup_context_history"));
+        let history = Self::load_history(root.join(".rup/context_history"));
         let hist_set = history
             .as_ref()
             .map(|v| {
@@ -1190,6 +1206,49 @@ impl ContextAssembler
                 });
             }
         };
+
+        // Validate anchor positioning if --hint-anchors is enabled
+        if env.args.hint_anchors
+        {
+            if let (Some(anchor_path), Some(anchor_line)) = (&env.args.anchor, env.args.anchor_line)
+            {
+                let anchor_str = format!("{}:{}", anchor_path.display(), anchor_line);
+                let anchor_args = AnchorArgs {
+                    hint_anchors: true,
+                    why: None,
+                    format: OutputFormat::Text,
+                };
+                
+                match validate_anchor_with_hints(
+                    Utf8Path::from_path(&env.root).unwrap_or_else(|| Utf8Path::new(".")), 
+                    &anchor_str, 
+                    &anchor_args
+                )
+                {
+                    Ok(Some(validated_fn)) =>
+                    {
+                        eprintln!("✓ Anchor validated: {} at {}:{}-{}", 
+                                 validated_fn.qualified_name, 
+                                 validated_fn.file, 
+                                 validated_fn.start_line, 
+                                 validated_fn.end_line);
+                    }
+                    Ok(None) =>
+                    {
+                        eprintln!("⚠ Anchor validation returned no function");
+                    }
+                    Err(e) =>
+                    {
+                        eprintln!("⚠ Anchor validation failed: {}", e);
+                        // Continue processing - validation is advisory
+                    }
+                }
+            }
+            else if env.args.anchor.is_some() || env.args.anchor_line.is_some()
+            {
+                eprintln!("⚠ Incomplete anchor: both --anchor FILE and --anchor-line LINE are required for validation");
+            }
+        }
 
         // Fail signals (best effort, autodetect)
         let mut fail_signals: Vec<FailSignal> = Vec::new();
@@ -1691,14 +1750,12 @@ impl ContextAssembler
                 println!("{}", out);
                 return Ok(());
             }
-            else
-            {
-                bail!(
-                    "Symbols file not found: {}. Run 'rup symbols' first (or enable auto-index).",
-                    env.symbols_path
-                        .display()
-                );
-            }
+
+            bail!(
+                "Symbols file not found: {}. Run 'rup symbols' first (or enable auto-index).",
+                env.symbols_path
+                    .display()
+            );
         }
 
         // No matches
@@ -1775,7 +1832,7 @@ impl ContextAssembler
         {
             Self::save_history(
                 env.root
-                    .join(".roughup_context_history"),
+                    .join(".rup/context_history"),
                 name,
             )
             .ok();

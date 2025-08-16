@@ -2,6 +2,9 @@ use std::{path::PathBuf, str::FromStr};
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
+// Re-export anchor args from CLI extension
+pub use crate::cli_ext::anchor_cmd::AnchorArgs;
+
 /// Tier presets for context assembly (A≈1200, B≈3000, C≈6000 tokens)
 /// Accepts A, B, C (case-insensitive) for easy command-line usage
 #[derive(Clone, Debug)]
@@ -52,7 +55,7 @@ pub struct AppContext
     pub dry_run: bool,  // global --dry-run
 }
 
-#[derive(Parser)]
+#[derive(Debug, Parser)]
 #[command(name = "roughup")]
 #[command(
     about = "A super-fast, lightweight CLI for extracting and packaging source code for LLM \
@@ -85,7 +88,7 @@ structs here to preserve pattern-matching ergonomics across the codebase and tes
 Boxing subcommand payloads is possible but risks API churn and clap derive quirks.
 If a future refactor splits these, this allow can be revisited."
 )]
-#[derive(Subcommand)]
+#[derive(Debug, Subcommand)]
 pub enum Commands
 {
     /// Extract specific line ranges from files
@@ -123,9 +126,12 @@ pub enum Commands
 
     /// Resolve Git conflict markers in files
     Resolve(ResolveArgs),
+
+    /// Validate anchor positions and suggest improvements
+    Anchor(AnchorArgs),
 }
 
-#[derive(Parser)]
+#[derive(Debug, Parser)]
 pub struct ExtractArgs
 {
     /// Files and line ranges (format: file.rs:10-20,25-30)
@@ -172,7 +178,7 @@ pub struct ExtractArgs
     pub squeeze_blank: bool,
 }
 
-#[derive(Parser)]
+#[derive(Debug, Parser)]
 pub struct TreeArgs
 {
     /// Root directory to scan
@@ -200,7 +206,7 @@ pub struct SymbolsArgs
     pub languages: Vec<String>,
 
     /// Output file path
-    #[arg(short, long, default_value = "symbols.jsonl")]
+    #[arg(short, long, default_value = ".rup/symbols.jsonl")]
     pub output: PathBuf,
 
     /// Include private symbols
@@ -208,7 +214,7 @@ pub struct SymbolsArgs
     pub include_private: bool,
 }
 
-#[derive(Parser)]
+#[derive(Debug, Parser)]
 pub struct ChunkArgs
 {
     /// Input file to chunk
@@ -244,7 +250,7 @@ pub enum MatchMode
     Auto,
 }
 
-#[derive(Parser)]
+#[derive(Debug, Parser)]
 pub struct ApplyArgs
 {
     /// Edit specification file to apply
@@ -343,7 +349,7 @@ pub enum WhitespaceMode
     Fix,
 }
 
-#[derive(Parser)]
+#[derive(Debug, Parser)]
 pub struct PreviewArgs
 {
     /// Edit specification file to preview
@@ -386,21 +392,21 @@ pub struct PreviewArgs
     #[arg(long, default_value = "3")]
     pub context_lines: usize,
 }
-#[derive(Parser)]
+#[derive(Debug, Parser)]
 pub struct CheckSyntaxArgs
 {
     /// Edit specification file to validate
     pub edit_file: PathBuf,
 }
 
-#[derive(Parser)]
+#[derive(Debug, Parser)]
 pub struct BackupArgs
 {
     #[command(subcommand)]
     pub command: BackupSubcommand,
 }
 
-#[derive(Subcommand)]
+#[derive(Debug, Subcommand)]
 pub enum BackupSubcommand
 {
     /// List backup sessions with optional filtering
@@ -517,7 +523,7 @@ pub struct BackupCleanupArgs
     #[arg(long)]
     pub json: bool,
 }
-#[derive(Parser)]
+#[derive(Debug, Parser)]
 pub struct InitArgs
 {
     /// Directory to initialize config in
@@ -539,7 +545,7 @@ pub enum Shell
     Elvish,
 }
 
-#[derive(Parser)]
+#[derive(Debug, Parser)]
 pub struct CompletionsArgs
 {
     /// Target shell
@@ -618,7 +624,7 @@ pub struct ContextArgs
     pub path: PathBuf,
 
     /// Symbols index file (JSONL) produced by `rup symbols`
-    #[arg(long, default_value = "symbols.jsonl")]
+    #[arg(long, default_value = ".rup/symbols.jsonl")]
     pub symbols: PathBuf,
 
     /// GPT model or encoding for token estimation (e.g., gpt-4o, o200k_base)
@@ -645,6 +651,10 @@ pub struct ContextArgs
     /// Anchor line number (1-based)
     #[arg(long)]
     pub anchor_line: Option<usize>,
+
+    /// Enable anchor hints and validation
+    #[arg(long)]
+    pub hint_anchors: bool,
 
     /// Limit per-query candidates before merging
     #[arg(long, default_value_t = 8)]
